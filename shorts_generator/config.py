@@ -18,7 +18,14 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
 LOCAL_WHISPER_MODEL = os.getenv("LOCAL_WHISPER_MODEL", "base")
 LOCAL_WHISPER_DEVICE = os.getenv("LOCAL_WHISPER_DEVICE", "auto")  # auto / cpu / cuda
-LOCAL_OUTPUT_DIR = os.getenv("LOCAL_OUTPUT_DIR", "output")
+# Selalu absolut, supaya downloader, transcriber, dan dashboard memakai
+# folder yang sama dari folder kerja mana pun aplikasi dijalankan.
+# Nilai relatif dihitung dari folder proyek, bukan dari folder kerja.
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOCAL_OUTPUT_DIR = os.path.abspath(os.path.join(
+    PROJECT_ROOT,
+    os.path.expanduser(os.getenv("LOCAL_OUTPUT_DIR", "").strip() or "output")
+))
 
 # VAD (Voice Activity Detection) settings for faster-whisper
 # Default threshold is 0.5; lower = more sensitive, higher = less sensitive

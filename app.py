@@ -1,6 +1,7 @@
 import os
 import re
 
+from shorts_generator.config import LOCAL_OUTPUT_DIR
 from shorts_generator.local.transcriber_youtube import transcribe_from_youtube
 from shorts_generator.zoi_engine import analyze_transcript
 from shorts_generator.ai_analyzer import analyze_with_ai
@@ -13,17 +14,10 @@ from flask import Flask, render_template_string, request, redirect, url_for, sen
 
 app = Flask(__name__)
 
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+OUTPUT_DIR = LOCAL_OUTPUT_DIR
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 RENDER_JOBS = {}
-from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory
-
-app = Flask(__name__)
-
-
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 HTML = """
 <!DOCTYPE html>
@@ -54,6 +48,7 @@ button{width:100%;padding:15px;border:0;border-radius:9px;background:#7565ef;col
 .tag{font-size:11px;color:#b9adff}
 .choose{background:#7565ef;margin-top:12px}
 .selected{border:2px solid #83d9a0}
+.error{border-color:#ff6b6b;color:#ffb3b3;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
 footer{text-align:center;color:#777;margin:30px 0;font-size:12px}
 </style>
 </head>
@@ -63,6 +58,9 @@ footer{text-align:center;color:#777;margin:30px 0;font-size:12px}
 <div class="subtitle">Your AI-powered video clipping studio</div>
 
 {% if not results %}
+{% if error %}
+<div class="card error">⚠️ {{ error }}</div>
+{% endif %}
 <div class="card">
 <h2>🎬 Buat Video Shorts</h2>
 <p class="note">Masukkan link YouTube dan pilih mode analisis.</p>

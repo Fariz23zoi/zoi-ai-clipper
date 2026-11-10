@@ -25,58 +25,132 @@ def _clean_text(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _parse_vtt(content):
+_TIMESTAMP = r"(?:\d+:)?\d{2}:\d{2}[.,]\d{3}"
+_CUE_TIMING = re.compile(
+    r"^\s*(" + _TIMESTAMP + r")\s*-->\s*(" + _TIMESTAMP + r")"
+)
+_INLINE_TIME = re.compile(r"<(" + _TIMESTAMP + r")>")
+
+
+def _read_cues(content):
+    """Pecah isi VTT menjadi daftar (start, end, baris-baris teks).
+
+    Cue hanya diakhiri baris yang benar-benar kosong. Baris berisi spasi
+    adalah bagian dari cue (YouTube memakainya sebagai baris kosong
+    pada rolling caption).
+    """
+    cues = []
+    current = None
+
+    for line in content.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        timing = _CUE_TIMING.match(line)
+
+        if timing:
+            current = []
+            cues.append((
+                _to_seconds(timing.group(1)),
+                _to_seconds(timing.group(2)),
+                current
+            ))
+        elif line == "":
+            current = None
+        elif current is not None:
+            current.append(line)
+
+    return cues
+
+
+def _plain_words(text):
+    """Bersihkan teks cue tanpa tag waktu lalu pecah menjadi kata."""
+    text = _clean_text(text)
+    # Buang simbol not. Keterangan seperti [tertawa] dipertahankan karena
+    # menjadi sinyal bagi ZOI Engine.
+    text = text.replace("\u266a", " ").replace("\u266b", " ")
+    text = re.sub(r"\[\s*\]", " ", text)
+    return text.split()
+
+
+def _spread_words(words, start, end):
+    """Bagi rata waktu cue untuk kata-kata yang tidak punya tag waktu."""
+    if not words:
+        return []
+
+    step = max(0.0, end - start) / len(words)
+
+    return [
+        {
+            "time": start + step * index,
+            "end": start + step * (index + 1),
+            "text": word
+        }
+        for index, word in enumerate(words)
+    ]
+
+
+def _timed_line_words(line, cue_start, cue_end):
+    """Ambil kata dari baris bertag waktu milik subtitle otomatis.
+
+    Bentuk barisnya: kata1<00:00:00.600><c> kata2</c><00:00:01.300><c> ...
+    Kata sebelum tag pertama dimulai pada awal cue.
+    """
+    parts = _INLINE_TIME.split(line)
+    chunks = [(cue_start, parts[0])]
+
+    for index in range(1, len(parts) - 1, 2):
+        chunks.append((_to_seconds(parts[index]), parts[index + 1]))
+
     words = []
-    blocks = re.split(r"\n\s*\n", content)
 
-    cue_pattern = re.compile(
-        r"^\s*(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->"
-    )
-    word_pattern = re.compile(
-        r"<(00:\d{2}:\d{2}\.\d{3})><c[^>]*>(.*?)</c>",
-        re.DOTALL
-    )
+    for index, (start, text) in enumerate(chunks):
+        if index + 1 < len(chunks):
+            end = chunks[index + 1][0]
+        else:
+            end = cue_end
 
-    first_timed_cue = True
-
-    for block in blocks:
-        lines = block.strip().splitlines()
-
-        cue_index = next(
-            (i for i, line in enumerate(lines) if "-->" in line),
-            None
+        words.extend(
+            _spread_words(_clean_text(text).split(), start, max(start, end))
         )
-        if cue_index is None:
+
+    return words
+
+
+def _parse_vtt(content):
+    cues = _read_cues(content)
+
+    # Subtitle otomatis YouTube memakai tag waktu per kata dan rolling
+    # caption. Subtitle manual hanya berisi teks biasa.
+    rolling = any(
+        _INLINE_TIME.search(line)
+        for _, _, lines in cues
+        for line in lines
+    )
+
+    words = []
+
+    for cue_start, cue_end, lines in cues:
+        if not lines:
             continue
 
-        cue_match = cue_pattern.match(lines[cue_index])
-        if not cue_match:
-            continue
+        if rolling:
+            # Baris terakhir berisi teks baru. Baris sebelumnya adalah
+            # ulangan cue lama, dan cue pengisi berakhir dengan baris kosong.
+            line = lines[-1]
 
-        cue_start = _to_seconds(cue_match.group(1))
-        body = "\n".join(lines[cue_index + 1:])
+            if not line.strip():
+                continue
 
-        matches = list(word_pattern.finditer(body))
-
-        if matches:
-            # Hanya ambil teks sebelum timestamp pada cue pertama.
-            # Cue berikutnya berisi rolling caption lama.
-            if first_timed_cue:
-                prefix = _clean_text(body[:matches[0].start()])
-                for word in prefix.split():
-                    words.append({
-                        "time": cue_start,
-                        "text": word
-                    })
-                first_timed_cue = False
-
-            for match in matches:
-                text = _clean_text(match.group(2))
-                for word in text.split():
-                    words.append({
-                        "time": _to_seconds(match.group(1)),
-                        "text": word
-                    })
+            if _INLINE_TIME.search(line):
+                words.extend(_timed_line_words(line, cue_start, cue_end))
+            else:
+                words.extend(
+                    _spread_words(_plain_words(line), cue_start, cue_end)
+                )
+        else:
+            words.extend(
+                _spread_words(
+                    _plain_words(" ".join(lines)), cue_start, cue_end
+                )
+            )
 
     words.sort(key=lambda item: item["time"])
 
@@ -108,6 +182,14 @@ def _parse_vtt(content):
     current_words = []
     segment_start = None
     previous_time = None
+    previous_end = None
+
+    def close_segment():
+        segments.append({
+            "start": round(segment_start, 2),
+            "end": round(max(previous_end, previous_time), 2),
+            "text": " ".join(current_words)
+        })
 
     for item in unique_words:
         timestamp = item["time"]
@@ -117,11 +199,10 @@ def _parse_vtt(content):
             duration = timestamp - segment_start
 
             if gap > 2.0 or duration >= 8.0:
-                segments.append({
-                    "start": round(segment_start, 2),
-                    "end": round(previous_time, 2),
-                    "text": " ".join(current_words)
-                })
+                # Akhir segmen adalah akhir kata terakhir, tetapi tidak
+                # boleh melewati awal segmen berikutnya.
+                previous_end = min(previous_end, timestamp)
+                close_segment()
                 current_words = []
                 segment_start = None
 
@@ -130,15 +211,14 @@ def _parse_vtt(content):
 
         current_words.append(item["text"])
         previous_time = timestamp
+        # Cue bisa bertahan di layar saat jeda; batasi panjang satu kata.
+        previous_end = min(item["end"], timestamp + 1.5)
 
     if current_words:
-        segments.append({
-            "start": round(segment_start, 2),
-            "end": round(previous_time, 2),
-            "text": " ".join(current_words)
-        })
+        close_segment()
 
     return segments
+
 
 def transcribe_from_youtube(
     video_url: str,
