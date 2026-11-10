@@ -114,7 +114,11 @@ def _timed_line_words(line, cue_start, cue_end):
     return words
 
 
-def _parse_vtt(content):
+PARSER_VERSION = 2
+
+
+def _parse_vtt_words(content):
+    """Kembalikan daftar kata {time, end, text} berurutan dari isi VTT."""
     cues = _read_cues(content)
 
     # Subtitle otomatis YouTube memakai tag waktu per kata dan rolling
@@ -177,7 +181,11 @@ def _parse_vtt(content):
         if not duplicate:
             unique_words.append(item)
 
-    # Gabungkan kata menjadi segmen percakapan.
+    return unique_words
+
+
+def _segments_from_words(unique_words):
+    """Gabungkan kata menjadi segmen percakapan."""
     segments = []
     current_words = []
     segment_start = None
@@ -218,6 +226,30 @@ def _parse_vtt(content):
         close_segment()
 
     return segments
+
+
+def _parse_vtt(content):
+    return _segments_from_words(_parse_vtt_words(content))
+
+
+def transcript_from_vtt(content):
+    """Ubah isi VTT menjadi segmen dan kata bertimestamp."""
+    words = _parse_vtt_words(content)
+
+    return {
+        "segments": _segments_from_words(words),
+        "words": [
+            {
+                "start": round(item["time"], 2),
+                "end": round(
+                    max(item["time"], min(item["end"], item["time"] + 1.5)),
+                    2
+                ),
+                "text": item["text"]
+            }
+            for item in words
+        ]
+    }
 
 
 def transcribe_from_youtube(
@@ -271,17 +303,25 @@ def transcribe_from_youtube(
             "js_runtimes": {"node": {}},
         }
 
-        try:
-            with YoutubeDL(options) as ydl:
-                ydl.extract_info(video_url, download=True)
-        except DownloadError:
-            continue
+        def subtitle_files():
+            return [
+                file for file in Path(LOCAL_OUTPUT_DIR).glob(
+                    f"youtube_transcript_{video_id}*.{lang}.vtt"
+                )
+                if file.stat().st_size > 0
+            ]
 
-        files = list(
-            Path(LOCAL_OUTPUT_DIR).glob(
-                f"youtube_transcript_{video_id}*.{lang}.vtt"
-            )
-        )
+        # Pakai ulang subtitle yang sudah pernah diunduh.
+        files = subtitle_files()
+
+        if not files:
+            try:
+                with YoutubeDL(options) as ydl:
+                    ydl.extract_info(video_url, download=True)
+            except DownloadError:
+                continue
+
+            files = subtitle_files()
 
         if files:
             subtitle_file = max(
@@ -293,7 +333,9 @@ def transcribe_from_youtube(
 
     if subtitle_file is None:
         raise RuntimeError(
-            "Subtitle bahasa Indonesia dan Inggris tidak ditemukan."
+            "Video ini tidak memiliki subtitle bahasa Indonesia maupun "
+            "Inggris di YouTube, jadi transkrip tidak bisa diambil. "
+            "Coba video lain yang memiliki subtitle/CC."
         )
 
     content = subtitle_file.read_text(
@@ -301,7 +343,8 @@ def transcribe_from_youtube(
         errors="replace"
     )
 
-    segments = _parse_vtt(content)
+    parsed = transcript_from_vtt(content)
+    segments = parsed["segments"]
 
     if not segments:
         raise RuntimeError(
@@ -311,10 +354,14 @@ def transcribe_from_youtube(
     return {
         "title": info.get("title", ""),
         "video_id": video_id,
+        "url": info.get("webpage_url") or video_url,
+        "channel": info.get("channel") or info.get("uploader") or "",
         "duration": float(
             info.get("duration")
             or max(s["end"] for s in segments)
         ),
         "language": selected_language,
-        "segments": segments
+        "parser_version": PARSER_VERSION,
+        "segments": segments,
+        "words": parsed["words"]
     }

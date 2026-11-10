@@ -1,157 +1,354 @@
+"""Dashboard ZOI AI CLIPPER.
+
+Alur: input URL -> transkrip -> analisis ZOI -> unduh video ->
+(opsional) ekspor/impor analisis AI lewat JSON -> pilih kandidat ->
+render 9:16 dengan progres FFmpeg -> putar/unduh hasil.
+
+Jalankan:  python app.py
+"""
+import json
 import os
 import re
-
-from shorts_generator.config import LOCAL_OUTPUT_DIR
-from shorts_generator.local.transcriber_youtube import transcribe_from_youtube
-from shorts_generator.zoi_engine import analyze_transcript
-from shorts_generator.ai_analyzer import analyze_with_ai
-from shorts_generator.local.clipper import crop_clip_local
-from shorts_generator.local.downloader import download_youtube_local
-import uuid
 import threading
+import time
+import uuid
 
-from flask import Flask, render_template_string, request, redirect, url_for, send_from_directory, jsonify
+from flask import (
+    Flask, Response, abort, jsonify, redirect, render_template, request,
+    send_from_directory, url_for,
+)
+
+from shorts_generator import exchange, zoi_engine_v4_2
+from shorts_generator.ai_analyzer import analyze_with_ai
+from shorts_generator.config import (
+    CLAUDE_API_KEY, LOCAL_OUTPUT_DIR, OPENAI_API_KEY,
+)
+from shorts_generator.local.clipper import crop_clip_local
+from shorts_generator.local.downloader import (
+    _extract_youtube_video_id, download_youtube_local,
+)
+from shorts_generator.local.transcriber_youtube import (
+    PARSER_VERSION, transcribe_from_youtube,
+)
+from shorts_generator.zoi_engine import analyze_transcript
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 OUTPUT_DIR = LOCAL_OUTPUT_DIR
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+MODES = ("zoi", "claude", "chatgpt", "hybrid")
+NUM_CLIPS = 5
+MIN_RENDER_SECONDS = 5.0
+MAX_RENDER_SECONDS = 180.0
+JOB_TTL_SECONDS = 3600
+
+ZOI_V41 = "ZOI ENGINE V4.1"
+ZOI_V42 = "ZOI ENGINE V4.2 (eksperimental)"
+
 RENDER_JOBS = {}
+ANALYZE_JOBS = {}
+_JOBS_LOCK = threading.Lock()
+# Satu render pada satu waktu: FFmpeg sudah memakai semua inti CPU HP.
+_RENDER_SLOT = threading.Semaphore(1)
 
-HTML = """
-<!DOCTYPE html>
-<html lang="id">
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ZOI AI CLIPPER</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:#0d0e14;color:#f5f5f5;font-family:Arial;padding:18px}
-.container{max-width:950px;margin:auto}
-.logo{font-size:26px;font-weight:bold;color:#9385ff}
-.subtitle{color:#999;font-size:13px;margin-top:6px}
-.card{background:#191a24;padding:18px;border-radius:15px;margin-top:18px;border:1px solid #30313d}
-h2{font-size:18px}
-input[type=url]{width:100%;padding:14px;border-radius:9px;border:1px solid #414251;background:#101116;color:white;margin:12px 0}
-.modes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.mode{background:#242532;border:1px solid #414251;padding:15px 8px;border-radius:11px;text-align:center;cursor:pointer}
-.mode.active{border:2px solid #9385ff;background:#302b50}
-.mode strong{display:block;margin-bottom:6px}
-.mode small{color:#aaa;font-size:11px}
-button{width:100%;padding:15px;border:0;border-radius:9px;background:#7565ef;color:white;font-weight:bold;margin-top:15px}
-.note{font-size:12px;color:#999;line-height:1.6}
-.result-title{color:#a99dff}
-.clip{background:#242530;padding:15px;border-radius:12px;margin-top:12px;border:1px solid #414251}
-.clip h3{font-size:15px;margin:0 0 10px}
-.score{color:#83d9a0;font-weight:bold}
-.tag{font-size:11px;color:#b9adff}
-.choose{background:#7565ef;margin-top:12px}
-.selected{border:2px solid #83d9a0}
-.error{border-color:#ff6b6b;color:#ffb3b3;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
-footer{text-align:center;color:#777;margin:30px 0;font-size:12px}
-</style>
-</head>
-<body>
-<div class="container">
-<div class="logo">ZOI AI CLIPPER</div>
-<div class="subtitle">Your AI-powered video clipping studio</div>
 
-{% if not results %}
-{% if error %}
-<div class="card error">⚠️ {{ error }}</div>
-{% endif %}
-<div class="card">
-<h2>🎬 Buat Video Shorts</h2>
-<p class="note">Masukkan link YouTube dan pilih mode analisis.</p>
-<form method="POST" action="/analyze">
-<input type="url" name="youtube_url" placeholder="Tempel link YouTube di sini" required>
-<h2>Pilih Mode AI</h2>
-<div class="modes">
-<label class="mode active"><input type="radio" name="mode" value="zoi" checked hidden><strong>⚡ ZOI</strong><small>Analisis bawaan ZOI</small></label>
-<label class="mode"><input type="radio" name="mode" value="claude" hidden><strong>🟣 CLAUDE</strong><small>Analisis Claude</small></label>
-<label class="mode"><input type="radio" name="mode" value="chatgpt" hidden><strong>🟢 CHATGPT</strong><small>Analisis ChatGPT</small></label>
-<label class="mode"><input type="radio" name="mode" value="hybrid" hidden><strong>🔥 HYBRID</strong><small>Claude + ChatGPT</small></label>
-</div>
-<button type="submit">ANALYZE VIDEO</button>
-</form>
-</div>
-{% else %}
-<div class="card">
-<h2>📊 Hasil Analisis</h2>
-<p class="note">Mode: <b>{{ mode.upper() }}</b></p>
-<p class="note">Video: {{ video_url }}</p>
-<p class="note">Hasil analisis transkrip menggunakan ZOI Engine.</p>
-</div>
+# ------------------------------------------------------------------ utilitas
 
-{% for group in results %}
-<div class="card">
-<h2 class="result-title">{{ group.name }}</h2>
-{% for clip in group.clips %}
-<div class="clip">
-<h3>{{ loop.index }}. {{ clip.title }}</h3>
-<p class="note">⏱ {{ clip.time }}</p>
+@app.template_filter("hms")
+def hms(seconds):
+    return exchange.format_time(seconds or 0)
 
-{% if clip.preview_url %}
-<video controls playsinline preload="metadata"
-style="width:100%;border-radius:10px;margin:10px 0;">
-<source src="{{ clip.preview_url }}" type="video/mp4">
-Browser tidak mendukung pemutar video.
-</video>
-{% else %}
-<p class="note">🎬 Preview belum tersedia. Video belum dirender.</p>
-{% endif %}
 
-<p>🎯 Hook: {{ clip.hook }}</p>
-<p class="note">Alasan: {{ clip.reason }}</p>
-<p class="score">Viral Score: {{ clip.score }}/100</p>
-<form method="POST" action="/select">
-<input type="hidden" name="title" value="{{ clip.title }}">
-<input type="hidden" name="time" value="{{ clip.time }}">
-<input type="hidden" name="analyst" value="{{ group.name }}">
-<input type="hidden" name="start_time" value="{{ clip.start_time }}">
-<input type="hidden" name="end_time" value="{{ clip.end_time }}">
-<input type="hidden" name="source_path" value="{{ clip.source_path }}">
-<button class="choose">PILIH & RENDER KLIP INI</button>
-</form>
-</div>
-{% endfor %}
-</div>
-{% endfor %}
-<a href="/" style="color:#aaa">← Kembali</a>
-{% endif %}
-<footer>ZOI AI CLIPPER © 2026</footer>
-</div>
+def _provider_keys():
+    return {"claude": bool(CLAUDE_API_KEY), "chatgpt": bool(OPENAI_API_KEY)}
 
-<script>
-document.querySelectorAll('.mode').forEach(item=>{
-item.addEventListener('click',()=>{
-document.querySelectorAll('.mode').forEach(el=>el.classList.remove('active'));
-item.classList.add('active');
-});
-});
-</script>
-</body>
-</html>
-"""
 
-def sample_clips(name):
-    clips = []
-    for i in range(1, 6):
-        clips.append({
-            "title": f"Kandidat Klip {i}",
-            "preview_url": "/output/preview-test.mp4",
-            "time": f"00:{(i-1)*2:02d}:00 - 00:{(i-1)*2+1:02d}:00",
-            "hook": f"Contoh hook menarik nomor {i}",
-            "reason": "Contoh alasan pemilihan adegan untuk simulasi.",
-            "score": 95 - i * 3
+def _update_job(jobs, job_id, **values):
+    with _JOBS_LOCK:
+        if job_id in jobs:
+            jobs[job_id].update(values)
+
+
+def _new_job(jobs, **values):
+    job_id = uuid.uuid4().hex
+    now = time.time()
+
+    with _JOBS_LOCK:
+        for old_id in [
+            key for key, job in jobs.items()
+            if job["status"] in ("done", "error")
+            and now - job["created_at"] > JOB_TTL_SECONDS
+        ]:
+            del jobs[old_id]
+
+        jobs[job_id] = {"status": "running", "error": "", "created_at": now}
+        jobs[job_id].update(values)
+
+    return job_id
+
+
+def _public_job(jobs, job_id):
+    with _JOBS_LOCK:
+        job = jobs.get(job_id)
+        if not job:
+            return None
+        return {key: value for key, value in job.items() if key != "created_at"}
+
+
+def _source_path(analysis):
+    """Path video sumber, hanya bila berada di dalam folder output."""
+    name = os.path.basename(str(analysis.get("source_file") or ""))
+    if not name:
+        return None
+
+    path = os.path.realpath(os.path.join(OUTPUT_DIR, name))
+    root = os.path.realpath(OUTPUT_DIR)
+
+    if path.startswith(root + os.sep) and os.path.isfile(path):
+        return path
+    return None
+
+
+def _is_render_file(filename):
+    return (
+        filename == os.path.basename(filename)
+        and filename.startswith("zoi_")
+        and filename.endswith(".mp4")
+        and ".part." not in filename
+        and ".cut." not in filename
+    )
+
+
+def _list_renders(video_id=None, limit=None):
+    """Daftar hasil render, terbaru lebih dulu."""
+    prefix = f"zoi_{video_id}_" if video_id else "zoi_"
+    items = []
+
+    try:
+        names = os.listdir(OUTPUT_DIR)
+    except OSError:
+        names = []
+
+    for name in names:
+        if not _is_render_file(name) or not name.startswith(prefix):
+            continue
+
+        path = os.path.join(OUTPUT_DIR, name)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            continue
+
+        items.append({
+            "filename": name,
+            "size_mb": round(stat.st_size / 1_048_576, 1),
+            "modified": time.strftime(
+                "%d %b %Y %H:%M", time.localtime(stat.st_mtime)
+            ),
+            "mtime": stat.st_mtime
         })
-    return {"name": name, "clips": clips}
+
+    items.sort(key=lambda item: item["mtime"], reverse=True)
+    return items[:limit] if limit else items
+
+
+def _clip_from_highlight(item):
+    return {
+        "title": str(item.get("title", "") or "Kandidat")[:100],
+        "start_time": float(item["start_time"]),
+        "end_time": float(item["end_time"]),
+        "duration": round(float(item["end_time"]) - float(item["start_time"]), 2),
+        "score": item.get("score", 0),
+        "hook_sentence": str(item.get("hook_sentence", "") or ""),
+        "virality_reason": str(item.get("virality_reason", "") or ""),
+        "warnings": list(item.get("warnings", []))
+    }
+
+
+def _mark_agreement(groups):
+    """Tandai kandidat impor yang juga dipilih mesin ZOI."""
+    zoi_clips = [
+        clip for group in groups if group.get("kind") == "zoi"
+        for clip in group["clips"]
+    ]
+
+    for group in groups:
+        for clip in group["clips"]:
+            clip["agrees_with_zoi"] = group.get("kind") != "zoi" and any(
+                exchange.overlap_ratio(clip, other) >= exchange.MAX_OVERLAP
+                for other in zoi_clips
+            )
+
+
+def _home(error="", status=200):
+    return render_template(
+        "home.html",
+        error=error,
+        keys=_provider_keys(),
+        videos=exchange.list_videos()[:10],
+        renders=_list_renders(limit=10)
+    ), status
+
+
+# ------------------------------------------------------------------ analisis
+
+def _run_zoi_engines(transcript):
+    groups = []
+
+    for name, engine in (
+        (ZOI_V41, analyze_transcript),
+        (ZOI_V42, zoi_engine_v4_2.analyze_transcript),
+    ):
+        highlights = engine(transcript, NUM_CLIPS).get("highlights", [])
+        groups.append({
+            "name": name,
+            "kind": "zoi",
+            "clips": [_clip_from_highlight(item) for item in highlights]
+        })
+
+    return groups
+
+
+def _run_api_providers(transcript, mode, notices):
+    """Jalur API lama. Hanya dipakai bila API key memang diatur."""
+    wanted = {
+        "claude": ["claude"],
+        "chatgpt": ["chatgpt"],
+        "hybrid": ["claude", "chatgpt"]
+    }.get(mode, [])
+
+    keys = _provider_keys()
+    labels = {"claude": "CLAUDE AI", "chatgpt": "CHATGPT AI"}
+    groups = []
+
+    for provider in wanted:
+        if not keys[provider]:
+            continue
+
+        try:
+            result = analyze_with_ai(transcript, provider, NUM_CLIPS)
+        except Exception as error:  # jaringan, kuota, format jawaban
+            notices.append(
+                f"Analisis {labels[provider]} lewat API gagal: "
+                f"{str(error)[:200]}"
+            )
+            continue
+
+        groups.append({
+            "name": labels[provider],
+            "kind": "api",
+            "clips": [
+                _clip_from_highlight(item)
+                for item in result.get("highlights", [])
+            ]
+        })
+
+    if wanted and not any(keys[provider] for provider in wanted):
+        notices.append(
+            "Mode ini berjalan tanpa API key. Gunakan bagian "
+            "\"Analisis AI eksternal\" di bawah: ekspor transkrip, berikan "
+            "ke Claude, lalu impor jawaban JSON-nya."
+        )
+
+    return groups
+
+
+def _analyze_worker(job_id, video_url, mode):
+    def stage(text, progress=None):
+        _update_job(ANALYZE_JOBS, job_id, stage=text, progress=progress)
+
+    try:
+        stage("Mengambil subtitle YouTube")
+
+        guessed_id = _extract_youtube_video_id(video_url)
+        transcript = None
+
+        if guessed_id and exchange.is_valid_video_id(guessed_id):
+            cached = exchange.load_transcript(guessed_id)
+            if cached and cached.get("parser_version") == PARSER_VERSION:
+                transcript = cached
+
+        if transcript is None:
+            transcript = transcribe_from_youtube(video_url)
+            if not exchange.is_valid_video_id(transcript.get("video_id")):
+                raise RuntimeError("ID video dari YouTube tidak valid.")
+            exchange.save_transcript(transcript)
+
+        video_id = transcript["video_id"]
+
+        stage("Menganalisis transkrip dengan ZOI Engine")
+        notices = []
+        groups = _run_zoi_engines(transcript)
+
+        if mode != "zoi":
+            stage("Menjalankan analisis AI")
+            groups.extend(_run_api_providers(transcript, mode, notices))
+
+        previous = exchange.load_analysis(video_id) or {}
+        groups.extend(
+            group for group in previous.get("groups", [])
+            if group.get("kind") == "import"
+        )
+
+        if not any(group["clips"] for group in groups):
+            notices.append(
+                "ZOI Engine tidak menemukan kandidat pada video ini. "
+                "Anda masih bisa memakai analisis AI eksternal di bawah."
+            )
+
+        def download_hook(status):
+            if status.get("status") != "downloading":
+                return
+
+            total = status.get("total_bytes") or status.get("total_bytes_estimate")
+            done = status.get("downloaded_bytes") or 0
+            is_audio = (status.get("info_dict") or {}).get("vcodec") == "none"
+            label = "Mengunduh audio" if is_audio else "Mengunduh video"
+
+            if total:
+                stage(label, max(0, min(100, int(done * 100 / total))))
+            else:
+                stage(f"{label} ({done / 1_048_576:.0f} MB)")
+
+        stage("Mengunduh video")
+        source_path = download_youtube_local(
+            video_url, progress_hook=download_hook
+        )
+
+        exchange.save_analysis(video_id, {
+            "video_id": video_id,
+            "title": transcript.get("title") or video_id,
+            "url": transcript.get("url") or video_url,
+            "duration": exchange.transcript_duration(transcript),
+            "language": transcript.get("language", ""),
+            "mode": mode,
+            "source_file": os.path.basename(source_path),
+            "updated_at": time.time(),
+            "notices": notices,
+            "groups": groups
+        })
+
+        _update_job(
+            ANALYZE_JOBS, job_id,
+            status="done", stage="Analisis selesai", progress=100,
+            video_id=video_id
+        )
+
+    except Exception as error:
+        _update_job(
+            ANALYZE_JOBS, job_id,
+            status="error", stage="Analisis gagal",
+            error=f"Gagal menganalisis video: {str(error)[:600]}"
+        )
+
+
+# ---------------------------------------------------------------------- rute
 
 @app.route("/")
 def home():
-    return render_template_string(HTML, results=None)
-
+    return _home()
 
 
 @app.route("/analyze", methods=["POST"])
@@ -159,212 +356,303 @@ def analyze():
     video_url = request.form.get("youtube_url", "").strip()
     mode = request.form.get("mode", "zoi")
 
-    try:
-        source_path = download_youtube_local(video_url)
-        transcript = transcribe_from_youtube(video_url)
+    if mode not in MODES:
+        return _home("Mode analisis tidak dikenal.", 400)
 
-        if mode == "zoi":
-            analyses = [
-                ("ZOI ENGINE V4.1", analyze_transcript(transcript, 5))
-            ]
-        elif mode == "claude":
-            analyses = [
-                ("CLAUDE AI", analyze_with_ai(transcript, "claude", 5))
-            ]
-        elif mode == "chatgpt":
-            analyses = [
-                ("CHATGPT AI", analyze_with_ai(transcript, "chatgpt", 5))
-            ]
-        elif mode == "hybrid":
-            analyses = [
-                ("CLAUDE AI", analyze_with_ai(transcript, "claude", 5)),
-                ("CHATGPT AI", analyze_with_ai(transcript, "chatgpt", 5))
-            ]
-        else:
-            raise ValueError("Mode analisis tidak dikenal.")
-
-        def format_time(seconds):
-            seconds = int(float(seconds))
-            hours = seconds // 3600
-            minutes = (seconds % 3600) // 60
-            secs = seconds % 60
-            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-
-        results = []
-
-        for group_name, analysis in analyses:
-            clips = []
-
-            for item in analysis.get("highlights", []):
-                clips.append({
-                    "title": item.get("title", "Kandidat AI"),
-                    "preview_url": None,
-                    "time": (
-                        format_time(item["start_time"])
-                        + " - "
-                        + format_time(item["end_time"])
-                    ),
-                    "hook": item.get("hook_sentence", ""),
-                    "reason": item.get("virality_reason", ""),
-                    "score": item.get("score", 0),
-                    "start_time": item["start_time"],
-                    "end_time": item["end_time"],
-                    "source_path": source_path
-                })
-
-            if clips:
-                results.append({
-                    "name": group_name,
-                    "clips": clips
-                })
-
-        if not results:
-            return render_template_string(
-                HTML,
-                results=None,
-                error="Tidak ditemukan kandidat klip yang valid."
-            )
-
-        return render_template_string(
-            HTML,
-            results=results,
-            mode=mode,
-            video_url=transcript.get("title", video_url)
+    if not re.match(r"^https?://\S+$", video_url):
+        return _home(
+            "Masukkan link YouTube yang diawali http:// atau https://.", 400
         )
 
-    except Exception as e:
-        return render_template_string(
-            HTML,
-            results=None,
-            error=f"Gagal menganalisis video: {str(e)}"
-        )
+    job_id = _new_job(
+        ANALYZE_JOBS, stage="Menyiapkan", progress=None, video_id=""
+    )
+    threading.Thread(
+        target=_analyze_worker, args=(job_id, video_url, mode), daemon=True
+    ).start()
+
+    return render_template("analyzing.html", job_id=job_id, video_url=video_url)
 
 
-@app.route("/select", methods=["POST"])
-def select():
-    title = request.form.get("title", "")
-    analyst = request.form.get("analyst", "")
-    source_path = os.path.realpath(request.form.get("source_path", ""))
-
-    try:
-        start = float(request.form.get("start_time", "0"))
-        end = float(request.form.get("end_time", "0"))
-    except ValueError:
-        return "Timestamp tidak valid.", 400
-
-    output_root = os.path.realpath(OUTPUT_DIR)
-    if not source_path.startswith(output_root + os.sep) or not os.path.isfile(source_path):
-        return "File video sumber tidak ditemukan atau tidak valid.", 400
-
-    if start < 0 or end <= start:
-        return "Timestamp klip tidak valid.", 400
-
-    safe_title = re.sub(r"[^a-zA-Z0-9_-]+", "_", title).strip("_")[:45]
-    filename = f"zoi_{safe_title}_{uuid.uuid4().hex[:6]}.mp4"
-    output_path = os.path.join(OUTPUT_DIR, filename)
-    job_id = uuid.uuid4().hex
-
-    RENDER_JOBS[job_id] = {
-        "progress": 0,
-        "stage": "Menyiapkan rendering",
-        "status": "running",
-        "filename": filename,
-        "error": ""
-    }
-
-    def render_worker():
-        try:
-            def update_progress(percent, stage):
-                RENDER_JOBS[job_id].update({
-                    "progress": max(0, min(100, int(percent))),
-                    "stage": stage
-                })
-
-            crop_clip_local(
-                source_path, start, end, "9:16", output_path,
-                progress_callback=update_progress
-            )
-
-            RENDER_JOBS[job_id].update({
-                "progress": 100,
-                "stage": "Rendering selesai",
-                "status": "done"
-            })
-
-        except Exception as e:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-            RENDER_JOBS[job_id].update({
-                "status": "error",
-                "stage": "Rendering gagal",
-                "error": str(e)
-            })
-
-    threading.Thread(target=render_worker, daemon=True).start()
-
-    return render_template_string("""
-    <body style="background:#101116;color:white;font-family:Arial;padding:22px">
-      <h2>🎬 Rendering ZOI AI CLIPPER</h2>
-      <p>Kandidat: {{ title }}</p>
-      <p>Analisis: {{ analyst }}</p>
-      <p>Durasi: {{ duration }} detik</p>
-      <div style="background:#30313d;border-radius:20px;height:18px;overflow:hidden">
-        <div id="bar" style="height:100%;width:0%;background:#9385ff;transition:width .3s"></div>
-      </div>
-      <h2 id="percent">0%</h2>
-      <p id="stage">Menyiapkan rendering...</p>
-      <div id="result"></div>
-      <script>
-        async function checkProgress() {
-          try {
-            const response = await fetch("/progress/{{ job_id }}");
-            const data = await response.json();
-            document.getElementById("bar").style.width = data.progress + "%";
-            document.getElementById("percent").textContent = data.progress + "%";
-            document.getElementById("stage").textContent = data.stage;
-
-            if (data.status === "done") {
-              document.getElementById("result").innerHTML =
-                '<h3>✅ Rendering berhasil!</h3>' +
-                '<video controls playsinline style="width:100%;max-width:420px;border-radius:12px">' +
-                '<source src="/output/' + encodeURIComponent(data.filename) + '" type="video/mp4"></video>' +
-                '<p><a style="color:#a99dff" download href="/output/' +
-                encodeURIComponent(data.filename) + '">⬇ DOWNLOAD VIDEO MP4</a></p>' +
-                '<a style="color:#aaa" href="/">Kembali ke dashboard</a>';
-              return;
-            }
-
-            if (data.status === "error") {
-              document.getElementById("result").innerHTML =
-                '<h3>❌ Rendering gagal</h3><p></p>';
-              document.querySelector("#result p").textContent = data.error;
-              return;
-            }
-
-            setTimeout(checkProgress, 800);
-          } catch (error) {
-            document.getElementById("stage").textContent =
-              "Menghubungkan kembali...";
-            setTimeout(checkProgress, 1500);
-          }
-        }
-        checkProgress();
-      </script>
-    </body>
-    """, title=title, analyst=analyst, duration=round(end-start, 1), job_id=job_id)
-
-
-@app.route("/progress/<job_id>")
-def render_progress(job_id):
-    job = RENDER_JOBS.get(job_id)
+@app.route("/analyze/status/<job_id>")
+def analyze_status(job_id):
+    job = _public_job(ANALYZE_JOBS, job_id)
     if not job:
         return jsonify({"status": "not_found"}), 404
     return jsonify(job)
 
+
+def _load_video(video_id):
+    if not exchange.is_valid_video_id(video_id):
+        abort(404)
+
+    analysis = exchange.load_analysis(video_id)
+    if not analysis:
+        abort(404)
+
+    return analysis
+
+
+def _load_transcript(video_id):
+    transcript = exchange.load_transcript(video_id)
+    if not transcript:
+        abort(404)
+    return transcript
+
+
+def _render_video_page(analysis, status=200, **extra):
+    groups = analysis.get("groups", [])
+    _mark_agreement(groups)
+
+    return render_template(
+        "video.html",
+        video=analysis,
+        groups=groups,
+        keys=_provider_keys(),
+        source_ready=_source_path(analysis) is not None,
+        renders=_list_renders(video_id=analysis["video_id"]),
+        limits=exchange,
+        **extra
+    ), status
+
+
+@app.route("/video/<video_id>")
+def video_page(video_id):
+    return _render_video_page(
+        _load_video(video_id), imported=request.args.get("imported", "")
+    )
+
+
+@app.route("/video/<video_id>/export.json")
+def export_json(video_id):
+    _load_video(video_id)
+    body = json.dumps(
+        exchange.build_export(_load_transcript(video_id)),
+        ensure_ascii=False, indent=1
+    )
+    return Response(
+        body, mimetype="application/json",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="zoi_export_{video_id}.json"'
+        }
+    )
+
+
+@app.route("/video/<video_id>/prompt.txt")
+def export_prompt(video_id):
+    _load_video(video_id)
+    body = exchange.build_prompt(
+        exchange.build_export(_load_transcript(video_id)), NUM_CLIPS
+    )
+    headers = {}
+
+    if request.args.get("dl"):
+        headers["Content-Disposition"] = (
+            f'attachment; filename="zoi_prompt_{video_id}.txt"'
+        )
+
+    return Response(
+        body, mimetype="text/plain; charset=utf-8", headers=headers
+    )
+
+
+@app.route("/video/<video_id>/import", methods=["POST"])
+def import_analysis(video_id):
+    analysis = _load_video(video_id)
+    transcript = _load_transcript(video_id)
+
+    raw = request.form.get("json_text", "")
+    upload = request.files.get("json_file")
+
+    if upload and upload.filename:
+        raw = upload.read(exchange.MAX_IMPORT_BYTES + 1).decode(
+            "utf-8", errors="replace"
+        )
+
+    analyst = request.form.get("analyst", "claude")
+    label = {
+        "claude": "CLAUDE", "chatgpt": "CHATGPT"
+    }.get(analyst, "AI LAIN") + " (IMPOR)"
+
+    try:
+        result = exchange.validate_import(exchange.parse_import(raw), transcript)
+    except exchange.ExchangeError as error:
+        return _render_video_page(
+            analysis, 400, import_error=str(error), import_text=raw[:200000]
+        )
+
+    if not result["accepted"]:
+        return _render_video_page(
+            analysis, 400,
+            import_error="Tidak ada kandidat yang lolos validasi.",
+            import_rejected=result["rejected"],
+            import_text=raw[:200000]
+        )
+
+    group = {
+        "name": label,
+        "kind": "import",
+        "imported_at": time.time(),
+        "clips": result["accepted"],
+        "rejected": result["rejected"],
+        "file_warnings": result["file_warnings"]
+    }
+
+    analysis["groups"] = [
+        old for old in analysis.get("groups", []) if old.get("name") != label
+    ] + [group]
+    analysis["updated_at"] = time.time()
+    exchange.save_analysis(video_id, analysis)
+
+    return redirect(
+        url_for("video_page", video_id=video_id, imported=label, _anchor="impor")
+    )
+
+
+@app.route("/video/<video_id>/group/delete", methods=["POST"])
+def delete_group(video_id):
+    analysis = _load_video(video_id)
+    name = request.form.get("name", "")
+
+    analysis["groups"] = [
+        group for group in analysis.get("groups", [])
+        if not (group.get("kind") == "import" and group.get("name") == name)
+    ]
+    exchange.save_analysis(video_id, analysis)
+
+    return redirect(url_for("video_page", video_id=video_id))
+
+
+@app.route("/select", methods=["POST"])
+def select():
+    video_id = request.form.get("video_id", "")
+    title = request.form.get("title", "")[:100]
+    analyst = request.form.get("analyst", "")[:60]
+
+    if not exchange.is_valid_video_id(video_id):
+        return "Video tidak dikenal.", 400
+
+    analysis = exchange.load_analysis(video_id)
+    if not analysis:
+        return "Video belum dianalisis.", 400
+
+    try:
+        start = float(request.form.get("start_time", ""))
+        end = float(request.form.get("end_time", ""))
+    except ValueError:
+        return "Timestamp tidak valid.", 400
+
+    duration = float(analysis.get("duration") or 0)
+
+    if not (start == start and end == end) or start < 0 or end <= start:
+        return "Timestamp klip tidak valid.", 400
+
+    if duration and end > duration + 1:
+        return "Timestamp klip melewati durasi video.", 400
+
+    if not MIN_RENDER_SECONDS <= end - start <= MAX_RENDER_SECONDS:
+        return "Durasi klip di luar batas yang diizinkan.", 400
+
+    source_path = _source_path(analysis)
+    if not source_path:
+        return (
+            "File video sumber tidak ditemukan. Analisis ulang video ini "
+            "dari halaman utama untuk mengunduhnya kembali."
+        ), 400
+
+    safe_title = re.sub(r"[^a-zA-Z0-9]+", "_", title).strip("_")[:30] or "klip"
+    filename = (
+        f"zoi_{video_id}_{int(start)}-{int(end)}_{safe_title}_"
+        f"{uuid.uuid4().hex[:6]}.mp4"
+    )
+    output_path = os.path.join(OUTPUT_DIR, filename)
+
+    job_id = _new_job(
+        RENDER_JOBS,
+        progress=0, stage="Menunggu giliran render", status="queued",
+        filename=filename
+    )
+
+    def render_worker():
+        with _RENDER_SLOT:
+            try:
+                _update_job(
+                    RENDER_JOBS, job_id,
+                    status="running", stage="Menyiapkan rendering"
+                )
+
+                def update_progress(percent, stage):
+                    _update_job(
+                        RENDER_JOBS, job_id,
+                        progress=max(0, min(99, int(percent))), stage=stage
+                    )
+
+                crop_clip_local(
+                    source_path, start, end, "9:16", output_path,
+                    progress_callback=update_progress
+                )
+
+                # 100% hanya setelah file akhir benar-benar ada.
+                if not os.path.isfile(output_path):
+                    raise RuntimeError("File hasil render tidak ditemukan.")
+
+                _update_job(
+                    RENDER_JOBS, job_id,
+                    progress=100, stage="Rendering selesai", status="done"
+                )
+
+            except Exception as error:
+                if os.path.exists(output_path):
+                    os.remove(output_path)
+                _update_job(
+                    RENDER_JOBS, job_id,
+                    status="error", stage="Rendering gagal",
+                    error=str(error)[-800:]
+                )
+
+    threading.Thread(target=render_worker, daemon=True).start()
+
+    return render_template(
+        "render.html",
+        title=title, analyst=analyst, duration=round(end - start, 1),
+        start=start, end=end, job_id=job_id, video=analysis
+    )
+
+
+@app.route("/progress/<job_id>")
+def render_progress(job_id):
+    job = _public_job(RENDER_JOBS, job_id)
+    if not job:
+        return jsonify({"status": "not_found"}), 404
+    return jsonify(job)
+
+
 @app.route("/output/<path:filename>")
 def serve_video(filename):
-    return send_from_directory(OUTPUT_DIR, filename)
+    # Hanya hasil render yang disajikan, bukan video sumber atau data lain.
+    if not _is_render_file(filename):
+        abort(404)
+
+    return send_from_directory(
+        OUTPUT_DIR, filename, as_attachment=bool(request.args.get("dl"))
+    )
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return _home("Halaman atau video tidak ditemukan.", 404)
+
+
+@app.errorhandler(413)
+def too_large(_error):
+    return "File terlalu besar (batas 2 MB).", 413
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
-
+    # Bawaan hanya bisa dibuka dari HP ini sendiri. Untuk membuka dari
+    # perangkat lain di Wi-Fi yang sama: ZOI_HOST=0.0.0.0 python app.py
+    host = os.getenv("ZOI_HOST", "127.0.0.1")
+    port = int(os.getenv("ZOI_PORT", "5000"))
+    print(f"ZOI AI CLIPPER berjalan di http://{host}:{port}", flush=True)
+    app.run(host=host, port=port, debug=False, threaded=True)

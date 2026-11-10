@@ -92,7 +92,8 @@ def _existing_download(out_dir: str, video_id: str) -> Optional[str]:
     return None
 
 
-def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None) -> str:
+def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None,
+                           progress_hook=None) -> str:
     """Download a remote URL or return a local file path unchanged."""
     local_path = _resolve_local_path(video_url)
     if local_path:
@@ -120,6 +121,9 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "js_runtimes": {"node": {}},
         "noprogress": True,
     }
+    if progress_hook:
+        # yt-dlp memanggil hook ini dengan downloaded_bytes / total_bytes.
+        ydl_opts["progress_hooks"] = [progress_hook]
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)

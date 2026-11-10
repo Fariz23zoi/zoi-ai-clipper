@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+{% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+
+<form class="card" method="POST" action="{{ url_for('analyze') }}">
+  <h1>Buat video Shorts</h1>
+  <p class="muted">Tempel link YouTube. Video harus memiliki subtitle/CC bahasa Indonesia atau Inggris.</p>
+
+  <label class="field" for="youtube_url">Link YouTube</label>
+  <input type="url" id="youtube_url" name="youtube_url" inputmode="url" autocomplete="off"
+         placeholder="https://www.youtube.com/watch?v=..." required>
+
+  <fieldset class="modes" style="margin-top:16px">
+    <legend>Mode analisis</legend>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="zoi" checked>
+      <span class="body"><strong>ZOI</strong><small>Analisis lokal ZOI Engine</small></span>
+    </label>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="claude">
+      <span class="body"><strong>Claude</strong>
+        <small>{% if keys.claude %}ZOI + Claude lewat API{% else %}ZOI + ekspor/impor JSON, tanpa API key{% endif %}</small></span>
+    </label>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="chatgpt">
+      <span class="body"><strong>ChatGPT</strong>
+        <small>{% if keys.chatgpt %}ZOI + ChatGPT lewat API{% else %}ZOI + ekspor/impor JSON, tanpa API key{% endif %}</small></span>
+    </label>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="hybrid">
+      <span class="body"><strong>Hybrid</strong><small>ZOI dan AI eksternal berdampingan</small></span>
+    </label>
+  </fieldset>
+
+  <button class="btn" type="submit" style="margin-top:16px">Analisis video</button>
+</form>
+
+{% if videos %}
+<section class="card">
+  <h2>Video yang sudah dianalisis</h2>
+  <ul class="list">
+  {% for item in videos %}
+    <li>
+      <span class="name">
+        <a class="title" href="{{ url_for('video_page', video_id=item.video_id) }}">{{ item.title }}</a><br>
+        <span class="muted">{{ item.duration|hms }} &middot; {{ item.candidate_count }} kandidat</span>
+      </span>
+      <a class="btn secondary inline" href="{{ url_for('video_page', video_id=item.video_id) }}">Buka</a>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if renders %}
+<section class="card">
+  <h2>Hasil render terbaru</h2>
+  <ul class="list">
+  {% for item in renders %}
+    <li>
+      <span class="name">
+        <a class="title" href="{{ url_for('serve_video', filename=item.filename) }}">{{ item.filename }}</a><br>
+        <span class="muted">{{ item.modified }} &middot; {{ item.size_mb }} MB</span>
+      </span>
+      <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}

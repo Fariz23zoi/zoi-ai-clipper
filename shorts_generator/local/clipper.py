@@ -12,37 +12,51 @@ from typing import Dict, List, Optional, Tuple
 
 from ..config import LOCAL_OUTPUT_DIR
 
+# Bisa diatur lewat .env. "veryfast" seimbang untuk HP; pakai "ultrafast"
+# bila perangkat lambat (file lebih besar), atau "fast" untuk kualitas.
+RENDER_PRESET = os.getenv("ZOI_RENDER_PRESET", "veryfast").strip() or "veryfast"
+RENDER_CRF = os.getenv("ZOI_RENDER_CRF", "23").strip() or "23"
+
 
 
 def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="Memproses"):
-    import subprocess
+    """Jalankan FFmpeg dan laporkan progres nyata dari -progress pipe:1."""
+    import tempfile
 
     command = list(cmd)
     command[1:1] = ["-progress", "pipe:1", "-nostats"]
-    proc = subprocess.Popen(
-        command, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, bufsize=1
-    )
-    try:
-        for line in proc.stdout:
-            if line.startswith("out_time_us="):
-                try:
-                    elapsed = int(line.split("=", 1)[1]) / 1_000_000
-                    pct = min(99, elapsed / max(float(duration), 0.1))
+
+    # stderr ditulis ke file sementara supaya pipa yang penuh tidak
+    # menghentikan FFmpeg selagi stdout sedang dibaca.
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errors:
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE,
+            stderr=errors, stdin=subprocess.DEVNULL, text=True, bufsize=1
+        )
+        try:
+            for line in proc.stdout:
+                if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                    try:
+                        elapsed = int(line.split("=", 1)[1]) / 1_000_000
+                        pct = max(0.0, min(0.99, elapsed / max(float(duration), 0.1)))
+                        if callback:
+                            callback(base + int(span * pct), stage)
+                    except ValueError:
+                        pass
+                elif line.startswith("progress=end"):
                     if callback:
-                        callback(base + int(span * pct), stage)
-                except ValueError:
-                    pass
-            elif line.startswith("progress=end"):
-                if callback:
-                    callback(base + span, stage)
-        error = proc.stderr.read()
-        code = proc.wait()
-        if code:
-            raise RuntimeError(error[-1500:] or f"FFmpeg error {code}")
-    finally:
-        if proc.poll() is None:
-            proc.kill()
+                        callback(base + span, stage)
+            code = proc.wait()
+            if code:
+                errors.seek(0)
+                detail = errors.read().strip()
+                raise RuntimeError(detail[-1500:] or f"FFmpeg error {code}")
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if proc.stdout:
+                proc.stdout.close()
 
 
 def _ratio(aspect_ratio: str) -> float:
@@ -78,10 +92,9 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str,
     try:
         import cv2  # type: ignore
     except ImportError:
-        # Fallback untuk Android/Termux tanpa OpenCV:
-        # crop vertikal di tengah menggunakan FFmpeg.
-        # Preserve the complete horizontal frame and subtitles.
-        # Fill the vertical canvas with a blurred duplicate background.
+        # Fallback tanpa OpenCV: seluruh frame asli dipertahankan dan
+        # kanvas vertikal diisi latar blur. Jalur utama di Termux adalah
+        # _render_vertical_single_pass(); blok ini dipakai untuk rasio lain.
         filter_complex = (
             "[0:v]split=2[bg][fg];"
             "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
@@ -186,6 +199,49 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str,
     return out_path
 
 
+def _has_opencv() -> bool:
+    try:
+        import cv2  # type: ignore  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _render_vertical_single_pass(source_path: str, start: float, end: float,
+                                 out_path: str, progress_callback=None) -> str:
+    """Potong dan ubah ke 9:16 dalam satu kali encode (tanpa OpenCV).
+
+    Seluruh frame asli tetap terlihat di tengah; ruang kosong diisi
+    salinan frame yang diblur. Blur dikerjakan pada resolusi kecil lalu
+    diperbesar: tampilannya setara, tetapi jauh lebih ringan untuk HP.
+    """
+    duration = max(0.1, end - start)
+    filter_complex = (
+        "[0:v]split=2[bg][fg];"
+        "[bg]scale=180:320:force_original_aspect_ratio=increase,"
+        "crop=180:320,boxblur=6:3,scale=720:1280[bg];"
+        "[fg]scale=720:1280:force_original_aspect_ratio=decrease[fg];"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+    )
+    cmd = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-ss", f"{start:.3f}", "-i", source_path,
+        "-t", f"{duration:.3f}",
+        "-filter_complex", filter_complex,
+        "-map", "[v]", "-map", "0:a:0?",
+        "-c:v", "libx264", "-preset", RENDER_PRESET, "-crf", RENDER_CRF,
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        out_path,
+    ]
+    _run_ffmpeg_progress(
+        cmd, duration, progress_callback,
+        5, 90, "Memotong + reframing 9:16 (background blur)"
+    )
+    return out_path
+
+
 def crop_clip_local(
     source_path: str,
     start_time: float,
@@ -194,22 +250,44 @@ def crop_clip_local(
     out_path: str,
     progress_callback=None,
 ) -> str:
-    """Cut + reframe one highlight and report rendering progress."""
-    cut_path = out_path + ".cut.mp4"
+    """Cut + reframe one highlight and report rendering progress.
+
+    Hasil ditulis ke file sementara dan baru diberi nama akhir setelah
+    FFmpeg selesai, sehingga file setengah jadi tidak pernah terlihat.
+    """
+    stem, ext = os.path.splitext(out_path)
+    work_path = f"{stem}.part{ext or '.mp4'}"
+    cut_path = f"{stem}.cut{ext or '.mp4'}"
     try:
-        _cut_subclip(
-            source_path, start_time, end_time, cut_path,
-            progress_callback=progress_callback
-        )
-        _reframe_vertical(
-            cut_path, out_path, aspect_ratio,
-            progress_callback=progress_callback
-        )
+        if progress_callback:
+            progress_callback(1, "Menyiapkan FFmpeg")
+
+        if _ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv():
+            _render_vertical_single_pass(
+                source_path, start_time, end_time, work_path,
+                progress_callback=progress_callback
+            )
+        else:
+            _cut_subclip(
+                source_path, start_time, end_time, cut_path,
+                progress_callback=progress_callback
+            )
+            _reframe_vertical(
+                cut_path, work_path, aspect_ratio,
+                progress_callback=progress_callback
+            )
+
+        if not os.path.isfile(work_path) or os.path.getsize(work_path) == 0:
+            raise RuntimeError("FFmpeg selesai tetapi file hasil kosong.")
+
+        os.replace(work_path, out_path)
+
         if progress_callback:
             progress_callback(100, "Rendering selesai")
     finally:
-        if os.path.exists(cut_path):
-            os.remove(cut_path)
+        for temp_path in (cut_path, work_path, work_path + ".silent.mp4"):
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
     return out_path
 
 

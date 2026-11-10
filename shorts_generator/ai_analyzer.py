@@ -117,7 +117,10 @@ def analyze_with_ai(transcript, provider="claude", num_clips=5):
         if duration < 30 or duration > 90:
             continue
 
-        score = max(0, min(100, int(item.get("score", 0))))
+        try:
+            score = max(0, min(100, int(round(float(item.get("score", 0))))))
+        except (TypeError, ValueError):
+            score = 0
 
         validated.append({
             "title": str(item.get("title", "Kandidat AI"))[:100],
