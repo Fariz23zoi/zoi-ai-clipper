@@ -51,12 +51,21 @@ def call_gemini_llm(prompt: str) -> str:
 
 
 def call_local_llm(prompt: str) -> str:
-    """Dispatch to the configured local LLM provider."""
-    provider = (LLM_PROVIDER or "openai").strip().lower()
-    if provider == "openai":
-        return call_openai_llm(prompt)
+    """Dispatch to the configured AI provider."""
+    provider = (LLM_PROVIDER or "claude").strip().lower()
+
+    if provider == "claude":
+        from ..ai_providers import call_claude_llm
+        return call_claude_llm(prompt)
+
+    if provider in ("chatgpt", "openai"):
+        from ..ai_providers import call_chatgpt_llm
+        return call_chatgpt_llm(prompt)
+
     if provider == "gemini":
         return call_gemini_llm(prompt)
+
     raise RuntimeError(
-        f"Unknown LLM_PROVIDER={provider!r}. Use 'openai' or 'gemini'."
+        f"Unknown LLM_PROVIDER={provider!r}. "
+        "Use 'claude', 'chatgpt', or 'gemini'."
     )

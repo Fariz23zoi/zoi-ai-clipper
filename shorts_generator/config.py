@@ -65,3 +65,12 @@ def require_gemini_key() -> str:
             "Add it to your .env or export it, or switch LLM_PROVIDER back to openai."
         )
     return GEMINI_API_KEY
+
+# Claude AI settings
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "").strip()
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
+
+def require_claude_key() -> str:
+    if not CLAUDE_API_KEY:
+        raise RuntimeError("CLAUDE_API_KEY belum diatur di file .env")
+    return CLAUDE_API_KEY

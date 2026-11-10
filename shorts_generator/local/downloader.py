@@ -117,6 +117,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
+        "js_runtimes": {"node": {}},
         "noprogress": True,
     }
 

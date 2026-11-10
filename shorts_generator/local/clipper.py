@@ -13,6 +13,38 @@ from typing import Dict, List, Optional, Tuple
 from ..config import LOCAL_OUTPUT_DIR
 
 
+
+def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="Memproses"):
+    import subprocess
+
+    command = list(cmd)
+    command[1:1] = ["-progress", "pipe:1", "-nostats"]
+    proc = subprocess.Popen(
+        command, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, bufsize=1
+    )
+    try:
+        for line in proc.stdout:
+            if line.startswith("out_time_us="):
+                try:
+                    elapsed = int(line.split("=", 1)[1]) / 1_000_000
+                    pct = min(99, elapsed / max(float(duration), 0.1))
+                    if callback:
+                        callback(base + int(span * pct), stage)
+                except ValueError:
+                    pass
+            elif line.startswith("progress=end"):
+                if callback:
+                    callback(base + span, stage)
+        error = proc.stderr.read()
+        code = proc.wait()
+        if code:
+            raise RuntimeError(error[-1500:] or f"FFmpeg error {code}")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+
+
 def _ratio(aspect_ratio: str) -> float:
     """Parse '9:16' → 9/16, '1:1' → 1.0."""
     try:
@@ -22,30 +54,62 @@ def _ratio(aspect_ratio: str) -> float:
         return 9.0 / 16.0
 
 
-def _cut_subclip(source_path: str, start: float, end: float, out_path: str) -> str:
-    """ffmpeg -ss start -to end → re-encoded mp4 with audio."""
+def _cut_subclip(source_path: str, start: float, end: float, out_path: str,
+                  progress_callback=None) -> str:
+    """Cut video and report FFmpeg progress."""
+    duration = max(0.1, end - start)
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-i", source_path,
-        "-ss", f"{start:.3f}",
-        "-to", f"{end:.3f}",
+        "-ss", f"{start:.3f}", "-i", source_path,
+        "-t", f"{duration:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-c:a", "aac", "-b:a", "128k",
         out_path,
     ]
-    subprocess.run(cmd, check=True)
+    _run_ffmpeg_progress(
+        cmd, duration, progress_callback, 5, 40, "Memotong video"
+    )
     return out_path
 
 
-def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str) -> str:
+def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str,
+                      progress_callback=None) -> str:
     """Crop the cut clip to the target aspect ratio, tracking faces if possible."""
     try:
         import cv2  # type: ignore
-    except ImportError as e:
-        raise RuntimeError(
-            "opencv-python is required for --mode local. Install it with:\n"
-            "    pip install -r requirements-local.txt"
-        ) from e
+    except ImportError:
+        # Fallback untuk Android/Termux tanpa OpenCV:
+        # crop vertikal di tengah menggunakan FFmpeg.
+        # Preserve the complete horizontal frame and subtitles.
+        # Fill the vertical canvas with a blurred duplicate background.
+        filter_complex = (
+            "[0:v]split=2[bg][fg];"
+            "[bg]scale=720:1280:force_original_aspect_ratio=increase,"
+            "crop=720:1280,boxblur=20:10[bg];"
+            "[fg]scale=720:1280:force_original_aspect_ratio=decrease[fg];"
+            "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+        )
+        cmd = [
+            "ffmpeg", "-y", "-loglevel", "error",
+            "-i", in_path,
+            "-filter_complex", filter_complex,
+            "-map", "[v]", "-map", "0:a:0?",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            out_path,
+        ]
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", in_path],
+            capture_output=True, text=True, check=True
+        )
+        duration = float(probe.stdout.strip() or "1")
+        _run_ffmpeg_progress(
+            cmd, duration, progress_callback,
+            45, 50, "Reframing 9:16 + background blur"
+        )
+        return out_path
 
     target_ratio = _ratio(aspect_ratio)
     cap = cv2.VideoCapture(in_path)
@@ -128,12 +192,21 @@ def crop_clip_local(
     end_time: float,
     aspect_ratio: str,
     out_path: str,
+    progress_callback=None,
 ) -> str:
-    """Cut + reframe one highlight, returning the local mp4 path."""
+    """Cut + reframe one highlight and report rendering progress."""
     cut_path = out_path + ".cut.mp4"
     try:
-        _cut_subclip(source_path, start_time, end_time, cut_path)
-        _reframe_vertical(cut_path, out_path, aspect_ratio)
+        _cut_subclip(
+            source_path, start_time, end_time, cut_path,
+            progress_callback=progress_callback
+        )
+        _reframe_vertical(
+            cut_path, out_path, aspect_ratio,
+            progress_callback=progress_callback
+        )
+        if progress_callback:
+            progress_callback(100, "Rendering selesai")
     finally:
         if os.path.exists(cut_path):
             os.remove(cut_path)
