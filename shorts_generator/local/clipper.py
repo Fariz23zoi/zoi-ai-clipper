@@ -17,6 +17,16 @@ from ..config import LOCAL_OUTPUT_DIR
 RENDER_PRESET = os.getenv("ZOI_RENDER_PRESET", "veryfast").strip() or "veryfast"
 RENDER_CRF = os.getenv("ZOI_RENDER_CRF", "23").strip() or "23"
 
+# Ukuran kanvas 9:16 untuk tiap pilihan kualitas render (lebar x tinggi).
+RENDER_SIZES = {
+    "240": (240, 426),
+    "360": (360, 640),
+    "480": (480, 854),
+    "720": (720, 1280),
+    "1080": (1080, 1920),
+}
+DEFAULT_RENDER_SIZE = RENDER_SIZES["720"]
+
 # FFmpeg dijalankan dengan prioritas lebih rendah supaya HP tetap bisa
 # dipakai selama rendering. 0 mematikan fitur ini.
 try:
@@ -280,19 +290,22 @@ def _has_opencv() -> bool:
 
 
 def _render_vertical_single_pass(source_path: str, start: float, end: float,
-                                 out_path: str, progress_callback=None) -> str:
+                                 out_path: str, progress_callback=None,
+                                 size: Optional[Tuple[int, int]] = None) -> str:
     """Potong dan ubah ke 9:16 dalam satu kali encode (tanpa OpenCV).
 
     Seluruh frame asli tetap terlihat di tengah; ruang kosong diisi
-    salinan frame yang diblur. Blur dikerjakan pada resolusi kecil lalu
-    diperbesar: tampilannya setara, tetapi jauh lebih ringan untuk HP.
+    salinan frame yang diblur. Blur selalu dikerjakan pada 180x320 lalu
+    diperbesar ke ukuran kanvas: latar blur tidak punya detail, jadi
+    tampilannya sama untuk semua ukuran dan bebannya tetap kecil.
     """
+    width, height = size or DEFAULT_RENDER_SIZE
     duration = max(0.1, end - start)
     filter_complex = (
         f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
         "[bg]scale=180:320:force_original_aspect_ratio=increase,"
-        "crop=180:320,boxblur=6:3,scale=720:1280[bg];"
-        "[fg]scale=720:1280:force_original_aspect_ratio=decrease[fg];"
+        f"crop=180:320,boxblur=6:3,scale={width}:{height}[bg];"
+        f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
         "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
     )
     cmd = [
@@ -309,7 +322,7 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
     ]
     _run_ffmpeg_progress(
         cmd, duration, progress_callback,
-        5, 90, "Memotong + reframing 9:16 (background blur)"
+        5, 90, f"Memotong + reframing 9:16 ({width}x{height})"
     )
     return out_path
 
@@ -321,11 +334,16 @@ def crop_clip_local(
     aspect_ratio: str,
     out_path: str,
     progress_callback=None,
+    size: Optional[Tuple[int, int]] = None,
 ) -> str:
     """Cut + reframe one highlight and report rendering progress.
 
     Hasil ditulis ke file sementara dan baru diberi nama akhir setelah
     FFmpeg selesai, sehingga file setengah jadi tidak pernah terlihat.
+
+    `size` (lebar, tinggi) dipakai dashboard: hasilnya selalu kanvas 9:16
+    berukuran itu dengan latar blur. Tanpa `size`, perilaku lama berlaku
+    (pelacakan wajah bila OpenCV terpasang, selain itu latar blur 720x1280).
     """
     stem, ext = os.path.splitext(out_path)
     work_path = f"{stem}.part{ext or '.mp4'}"
@@ -334,10 +352,10 @@ def crop_clip_local(
         if progress_callback:
             progress_callback(1, "Menyiapkan FFmpeg")
 
-        if _ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv():
+        if size or (_ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv()):
             _render_vertical_single_pass(
                 source_path, start_time, end_time, work_path,
-                progress_callback=progress_callback
+                progress_callback=progress_callback, size=size
             )
         else:
             _cut_subclip(

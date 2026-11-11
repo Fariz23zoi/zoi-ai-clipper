@@ -20,28 +20,47 @@ Buka `http://127.0.0.1:5000` di browser HP. Untuk membuka dari perangkat lain di
 
 ## Alur pakai
 
-1. Tempel link YouTube, pilih mode, tekan **Analisis video**. Video harus punya subtitle/CC bahasa Indonesia atau Inggris.
-2. Analisis hanya mengambil subtitle, jadi cepat dan hemat kuota. Video belum diunduh pada tahap ini.
-3. Halaman kandidat menampilkan hasil **ZOI Engine V4.1** dan **V4.2 (eksperimental)**.
-4. Tekan **Render klip ini** pada kandidat pilihan. Pada render pertama, video diunduh dulu (Langkah 1 dari 2, persentase dari yt-dlp), lalu dirender (Langkah 2 dari 2, persentase dari FFmpeg). Render berikutnya dari video yang sama langsung jalan.
-5. Putar atau unduh hasilnya. File tersimpan di `output/` dengan awalan `zoi_`.
+Dashboard terdiri dari tiga halaman.
+
+**Halaman 1: tempel link.** Tempel link YouTube, pilih mode, tekan **Analisis video**. Video harus punya subtitle/CC bahasa Indonesia atau Inggris. Analisis hanya mengambil subtitle, jadi cepat dan hemat kuota; video belum diunduh.
+
+**Halaman 2: analisis AI.** Hanya muncul pada mode Claude, ChatGPT, dan Hybrid. Salin prompt, tempel ke Claude atau ChatGPT, lalu tempel jawabannya dan tekan **Impor dan lihat hasil**. Mode ZOI melewati halaman ini.
+
+**Halaman 3: pilih klip.** Pilih **Kualitas render**, lalu tekan **Render klip ini** pada kandidat pilihan. Hasil analisis AI tampil paling atas, hasil ZOI Engine V4.1 dan V4.2 di bawahnya. Pada render pertama, video diunduh dulu (Langkah 1 dari 2, persentase dari yt-dlp), lalu dirender (Langkah 2 dari 2, persentase dari FFmpeg). Hasilnya bisa diputar dan diunduh; file tersimpan di `output/` dengan awalan `zoi_`.
+
+## Kualitas render
+
+| Pilihan | Ukuran hasil | Video sumber yang diunduh |
+|---|---|---|
+| 240p | 240x426 | 144p |
+| 360p | 360x640 | 240p |
+| 480p | 480x854 | 360p |
+| 720p | 720x1280 | 480p |
+| 1080p | 1080x1920 | 720p |
+
+- Kolom terakhir berlaku untuk video mendatar 16:9. Aplikasi mengunduh sumber paling ringan yang masih mengisi kanvas tanpa diperbesar. Contoh: kanvas selebar 720 piksel cukup diisi video 480p, karena video 480p lebarnya 854 piksel. Untuk video 4:3 atau video tegak, aplikasi otomatis meminta sumber yang lebih tinggi.
+- Makin tinggi pilihannya, makin lama unduhan dan render.
+- Video sumber disimpan satu per video. Bila Anda memilih kualitas yang lebih tinggi daripada sumber yang tersimpan, video diunduh ulang dengan kualitas yang cukup. Memilih kualitas lebih rendah memakai sumber yang sudah ada.
+- Pilihan terakhir diingat browser. Bawaan pertama kali adalah 720p (bisa diubah lewat `ZOI_RENDER_QUALITY`).
 
 ## Supaya ringan di HP
 
-- **Kualitas video sumber.** Pilihan bawaan adalah Ringan (480p). Hasil akhir tetap 720x1280: bagian video di tengah selebar 720 piksel, sedangkan sumber 480p selebar 854 piksel, jadi masih cukup. Pilih Tajam (720p) bila ingin gambar lebih tajam dan HP sanggup.
+- **Pilih kualitas render yang lebih rendah** bila HP terasa berat. 480p jauh lebih cepat daripada 720p atau 1080p.
 - **Unduhan dipilih yang ringan.** Aplikasi meminta video paling banyak 30 fps dengan codec H.264.
 - **Render dibatasi 30 fps.** Video sumber 50/60 fps dirender separuhnya (25/30 fps).
 - **FFmpeg berjalan dengan prioritas rendah**, supaya HP tetap bisa dipakai selama rendering.
-- **Kosongkan penyimpanan.** Di halaman video ada tombol **Hapus video sumber**. Kandidat tetap tersimpan, dan video diunduh lagi bila Anda merender. Klip hasil render juga bisa dihapus dari daftar.
+- **Kosongkan penyimpanan.** Di halaman 3 ada tombol **Hapus video sumber**. Kandidat tetap tersimpan, dan video diunduh lagi bila Anda merender. Klip hasil render juga bisa dihapus dari daftar.
 - **Saran pemakaian.** Render satu klip pada satu waktu (aplikasi sudah mengantrekannya), tutup aplikasi lain yang berat, dan jalankan `termux-wake-lock` sebelum `python app.py` agar Android tidak menghentikan Termux saat layar mati.
 
 ## Analisis dengan Claude tanpa API key
 
-Di halaman kandidat, buka bagian **Analisis AI eksternal**:
+Pada mode Claude, ChatGPT, atau Hybrid, halaman 2 terbuka otomatis setelah analisis. Pada mode ZOI, halaman ini bisa dibuka lewat tombol **Analisis dengan Claude dan ChatGPT** di bagian bawah halaman 3.
 
-1. Tekan **Salin prompt** (atau unduh `.txt`).
-2. Tempel ke Claude dan tunggu jawaban JSON.
-3. Tempel jawabannya ke kotak **Jawaban JSON**, lalu tekan **Impor dan validasi**.
+1. Tekan **Salin prompt**.
+2. Tekan **Buka Claude** (atau **Buka ChatGPT**), tempel prompt, kirim, lalu salin seluruh jawabannya.
+3. Tempel jawabannya ke kotak **Jawaban Claude** (atau **Jawaban ChatGPT**), lalu tekan **Impor dan lihat hasil**.
+
+Pada mode Hybrid ada dua kotak; isi salah satu atau keduanya. Bila transkrip terlalu panjang untuk ditempel, buka **Pilihan lain: pakai file** untuk mengunduh prompt dan mengunggah jawaban sebagai file.
 
 ZOI menolak kandidat yang timestamp-nya di luar durasi video, durasinya di luar 30–90 detik, tidak cocok dengan nomor segmen, hampir tanpa ucapan, atau tumpang tindih 40% ke atas dengan kandidat lain. Maksimal 10 kandidat. Kandidat yang ditolak ditampilkan beserta alasannya.
 
@@ -72,15 +91,19 @@ Format jawaban yang diterima:
 
 | Mode | Tanpa API key | Dengan API key di `.env` |
 |---|---|---|
-| ZOI | ZOI Engine saja | sama |
-| Claude / ChatGPT / Hybrid | ZOI Engine + panduan ekspor/impor | ZOI Engine + analisis lewat API |
+| ZOI | Halaman 1 lalu langsung halaman 3 | sama |
+| Claude | Halaman 2 meminta jawaban Claude | Analisis lewat API, langsung ke halaman 3 |
+| ChatGPT | Halaman 2 meminta jawaban ChatGPT | Analisis lewat API, langsung ke halaman 3 |
+| Hybrid | Halaman 2 meminta jawaban Claude dan ChatGPT | Analisis lewat API untuk yang punya key |
+
+ZOI Engine selalu dijalankan pada semua mode; hasilnya tampil di bawah hasil AI.
 
 ## Tempat file
 
 | Lokasi | Isi |
 |---|---|
 | `output/source_<id>.mp4` | Video sumber (hanya terhapus bila Anda menekan Hapus video sumber) |
-| `output/zoi_<id>_<mulai>-<selesai>_<judul>_<acak>.mp4` | Hasil render |
+| `output/zoi_<id>_<mulai>-<selesai>_<kualitas>p_<judul>_<acak>.mp4` | Hasil render |
 | `output/data/<id>/transcript.json` | Transkrip tersimpan |
 | `output/data/<id>/analysis.json` | Kandidat ZOI dan hasil impor |
 | `backups/` | Salinan file sebelum perubahan besar |
@@ -104,6 +127,6 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_RENDER_CRF` | `23` | Lebih kecil = kualitas lebih tinggi |
 | `ZOI_RENDER_MAX_FPS` | `30` | Batas fps hasil render; `0` = ikut sumber |
 | `ZOI_RENDER_NICE` | `10` | Prioritas FFmpeg (0-19); `0` = prioritas normal |
-| `ZOI_DOWNLOAD_HEIGHT` | `480` | Kualitas sumber bawaan: `480` atau `720` |
+| `ZOI_RENDER_QUALITY` | `720` | Kualitas render bawaan: `240`, `360`, `480`, `720`, atau `1080` |
 | `ZOI_DOWNLOAD_AT_ANALYSIS` | kosong | Isi `1` bila video ingin langsung diunduh saat analisis |
 | `LOCAL_OUTPUT_DIR` | `output` | Folder hasil |

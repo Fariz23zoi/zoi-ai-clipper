@@ -1,14 +1,19 @@
 """Dashboard ZOI AI CLIPPER.
 
-Alur: input URL -> transkrip -> analisis ZOI -> unduh video ->
-(opsional) ekspor/impor analisis AI lewat JSON -> pilih kandidat ->
-render 9:16 dengan progres FFmpeg -> putar/unduh hasil.
+Alur tiga halaman:
+  1. Tempel link YouTube dan pilih mode.
+  2. (Mode Claude/ChatGPT/Hybrid) Salin prompt, tempel jawaban JSON.
+     Mode ZOI melewati halaman ini.
+  3. Pilih kandidat dan kualitas render. Video diunduh saat render
+     pertama, lalu dirender 9:16 dengan progres nyata dari yt-dlp dan
+     FFmpeg.
 
 Jalankan:  python app.py
 """
 import json
 import os
 import re
+import subprocess
 import threading
 import time
 import uuid
@@ -23,7 +28,7 @@ from shorts_generator.ai_analyzer import analyze_with_ai
 from shorts_generator.config import (
     CLAUDE_API_KEY, LOCAL_OUTPUT_DIR, OPENAI_API_KEY,
 )
-from shorts_generator.local.clipper import crop_clip_local
+from shorts_generator.local.clipper import RENDER_SIZES, crop_clip_local
 from shorts_generator.local.downloader import (
     _extract_youtube_video_id, download_youtube_local,
 )
@@ -44,13 +49,16 @@ MIN_RENDER_SECONDS = 5.0
 MAX_RENDER_SECONDS = 180.0
 JOB_TTL_SECONDS = 3600
 
-# Kualitas video sumber. Hasil akhir selalu 720x1280 dan bagian video di
-# tengahnya selebar 720 piksel, jadi sumber 480p (lebar 854 piksel) sudah
-# cukup dan jauh lebih ringan untuk diunduh serta diproses di HP.
-DOWNLOAD_HEIGHTS = ("480", "720")
-DEFAULT_DOWNLOAD_HEIGHT = os.getenv("ZOI_DOWNLOAD_HEIGHT", "480").strip()
-if DEFAULT_DOWNLOAD_HEIGHT not in DOWNLOAD_HEIGHTS:
-    DEFAULT_DOWNLOAD_HEIGHT = "480"
+# Pilihan kualitas render: label -> (lebar, tinggi) kanvas 9:16.
+QUALITIES = RENDER_SIZES
+DEFAULT_QUALITY = os.getenv("ZOI_RENDER_QUALITY", "720").strip().rstrip("pP")
+if DEFAULT_QUALITY not in QUALITIES:
+    DEFAULT_QUALITY = "720"
+
+# Tingkat kualitas video YouTube, diukur dari sisi terpendeknya (piksel).
+SOURCE_TIERS = (144, 240, 360, 480, 720, 1080)
+CANVAS_RATIO = 9 / 16
+DEFAULT_ASPECT = 16 / 9
 
 # Bawaan: video baru diunduh saat pengguna merender, bukan saat analisis,
 # sehingga HP tidak mengunduh video yang akhirnya tidak dipakai.
@@ -62,6 +70,24 @@ SOURCE_EXTENSIONS = (".mp4", ".mkv", ".webm")
 
 ZOI_V41 = "ZOI ENGINE V4.1"
 ZOI_V42 = "ZOI ENGINE V4.2 (eksperimental)"
+
+# Analis eksternal: hasilnya masuk lewat salin-tempel JSON, tanpa API key.
+ANALYSTS = {
+    "claude": {
+        "name": "Claude", "label": "CLAUDE (IMPOR)",
+        "url": "https://claude.ai/new"
+    },
+    "chatgpt": {
+        "name": "ChatGPT", "label": "CHATGPT (IMPOR)",
+        "url": "https://chatgpt.com/"
+    },
+}
+MODE_ANALYSTS = {
+    "zoi": ("claude", "chatgpt"),
+    "claude": ("claude",),
+    "chatgpt": ("chatgpt",),
+    "hybrid": ("claude", "chatgpt"),
+}
 
 RENDER_JOBS = {}
 ANALYZE_JOBS = {}
@@ -210,7 +236,92 @@ def _update_analysis(video_id, change):
         return analysis
 
 
-def _download_source(video_url, height, report):
+# ----------------------------------------------------------- kualitas sumber
+
+def _aspect(analysis):
+    """Rasio lebar/tinggi video sumber; 16:9 bila tidak diketahui."""
+    try:
+        value = float(analysis.get("aspect") or 0)
+    except (TypeError, ValueError):
+        value = 0.0
+
+    return value if 0.2 <= value <= 5 else DEFAULT_ASPECT
+
+
+def _needed_source_res(canvas_width, aspect):
+    """Kualitas sumber paling ringan yang masih mengisi kanvas tanpa
+    diperbesar. Nilainya salah satu SOURCE_TIERS (sisi terpendek video).
+
+    Pada kanvas 9:16, video mendatar dipasang selebar kanvas, jadi yang
+    menentukan adalah lebar video, bukan tingginya. Contoh: kanvas 720
+    piksel hanya butuh sumber 480p, karena video 480p lebarnya 854 piksel.
+    """
+    if aspect >= 1:
+        needed = canvas_width / aspect
+    elif aspect >= CANVAS_RATIO:
+        needed = canvas_width
+    else:
+        needed = canvas_width / CANVAS_RATIO * aspect
+
+    for tier in SOURCE_TIERS:
+        if tier >= needed - 1:
+            return tier
+
+    return SOURCE_TIERS[-1]
+
+
+def _probe_short_side(path):
+    """Sisi terpendek video (piksel) menurut ffprobe, atau None."""
+    try:
+        output = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+            capture_output=True, text=True, check=True, timeout=60
+        ).stdout
+        width, height = (int(value) for value in output.strip().split(",")[:2])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+    return min(width, height) if min(width, height) > 0 else None
+
+
+def _source_res(analysis, source_path):
+    """Kualitas video sumber yang tersimpan; 0 bila belum ada file."""
+    if not source_path:
+        return 0
+
+    try:
+        recorded = int(analysis.get("source_res") or 0)
+    except (TypeError, ValueError):
+        recorded = 0
+
+    if recorded > 0:
+        return recorded
+
+    # File dari versi lama tidak punya catatan: baca ukurannya. Bila tidak
+    # terbaca, anggap cukup supaya tidak mengunduh ulang tanpa alasan.
+    return _probe_short_side(source_path) or 10 ** 6
+
+
+def _quality_options(analysis, source_path):
+    """Daftar pilihan kualitas beserta sumber yang dibutuhkan masing-masing."""
+    have = _source_res(analysis, source_path)
+    aspect = _aspect(analysis)
+    options = []
+
+    for quality, (width, height) in QUALITIES.items():
+        needed = _needed_source_res(width, aspect)
+        options.append({
+            "id": quality,
+            "size": f"{width}x{height}",
+            "source": needed,
+            "ready": bool(source_path) and have >= needed
+        })
+
+    return options
+
+
+def _download_source(video_url, tier, report):
     """Unduh video sumber; `report(tahap, persen)` menerima progres yt-dlp."""
     def hook(status):
         state = status.get("status")
@@ -234,7 +345,7 @@ def _download_source(video_url, height, report):
 
     report("Menghubungi YouTube", None)
     path = os.path.realpath(download_youtube_local(
-        video_url, fmt=height, out_dir=OUTPUT_DIR, progress_hook=hook
+        video_url, fmt=str(tier), out_dir=OUTPUT_DIR, progress_hook=hook
     ))
     root = os.path.realpath(OUTPUT_DIR)
 
@@ -243,6 +354,39 @@ def _download_source(video_url, height, report):
 
     return path
 
+
+def _fetch_source(video_id, video_url, tier, existing_path, report):
+    """Unduh sumber pada kualitas `tier` dan catat di analysis.json.
+
+    Bila sudah ada file dengan kualitas lebih rendah, file itu disisihkan
+    dulu dan baru dihapus setelah unduhan baru berhasil. Bila unduhan
+    gagal, file lama dikembalikan.
+    """
+    backup = None
+
+    if existing_path:
+        backup = existing_path + ".lama"
+        os.replace(existing_path, backup)
+
+    try:
+        path = _download_source(video_url, tier, report)
+    except Exception:
+        if backup and os.path.exists(backup):
+            os.replace(backup, existing_path)
+        raise
+
+    if backup and os.path.exists(backup):
+        os.remove(backup)
+
+    name = os.path.basename(path)
+    _update_analysis(
+        video_id,
+        lambda current: current.update(source_file=name, source_res=tier)
+    )
+    return path
+
+
+# ------------------------------------------------------------- hasil render
 
 def _is_render_file(filename):
     return (
@@ -301,7 +445,7 @@ def _clip_from_highlight(item):
 
 
 def _mark_agreement(groups):
-    """Tandai kandidat impor yang juga dipilih mesin ZOI."""
+    """Tandai kandidat AI yang juga dipilih mesin ZOI."""
     zoi_clips = [
         clip for group in groups if group.get("kind") == "zoi"
         for clip in group["clips"]
@@ -313,6 +457,14 @@ def _mark_agreement(groups):
                 exchange.overlap_ratio(clip, other) >= exchange.MAX_OVERLAP
                 for other in zoi_clips
             )
+
+
+def _analysts_for(mode):
+    """Analis eksternal yang relevan untuk sebuah mode."""
+    return [
+        dict(id=key, **ANALYSTS[key])
+        for key in MODE_ANALYSTS.get(mode, MODE_ANALYSTS["zoi"])
+    ]
 
 
 def _home(error="", status=200):
@@ -327,8 +479,7 @@ def _home(error="", status=200):
         keys=_provider_keys(),
         videos=videos,
         renders=_list_renders(limit=10),
-        storage=_storage_summary(),
-        default_height=DEFAULT_DOWNLOAD_HEIGHT
+        storage=_storage_summary()
     ), status
 
 
@@ -353,17 +504,11 @@ def _run_zoi_engines(transcript):
 
 def _run_api_providers(transcript, mode, notices):
     """Jalur API lama. Hanya dipakai bila API key memang diatur."""
-    wanted = {
-        "claude": ["claude"],
-        "chatgpt": ["chatgpt"],
-        "hybrid": ["claude", "chatgpt"]
-    }.get(mode, [])
-
     keys = _provider_keys()
     labels = {"claude": "CLAUDE AI", "chatgpt": "CHATGPT AI"}
     groups = []
 
-    for provider in wanted:
+    for provider in MODE_ANALYSTS.get(mode, ()):
         if not keys[provider]:
             continue
 
@@ -385,17 +530,20 @@ def _run_api_providers(transcript, mode, notices):
             ]
         })
 
-    if wanted and not any(keys[provider] for provider in wanted):
-        notices.append(
-            "Mode ini berjalan tanpa API key. Gunakan bagian "
-            "\"Analisis AI eksternal\" di bawah: ekspor transkrip, berikan "
-            "ke Claude, lalu impor jawaban JSON-nya."
-        )
-
     return groups
 
 
-def _analyze_worker(job_id, video_url, mode, height):
+def _transcript_aspect(transcript):
+    try:
+        width = int(transcript.get("width") or 0)
+        height = int(transcript.get("height") or 0)
+    except (TypeError, ValueError):
+        return None
+
+    return round(width / height, 4) if width > 0 and height > 0 else None
+
+
+def _analyze_worker(job_id, video_url, mode):
     def stage(text, progress=None):
         _update_job(ANALYZE_JOBS, job_id, stage=text, progress=progress)
 
@@ -417,6 +565,7 @@ def _analyze_worker(job_id, video_url, mode, height):
             exchange.save_transcript(transcript)
 
         video_id = transcript["video_id"]
+        aspect = _transcript_aspect(transcript)
 
         stage("Menganalisis transkrip dengan ZOI Engine")
         notices = []
@@ -426,11 +575,15 @@ def _analyze_worker(job_id, video_url, mode, height):
             stage("Menjalankan analisis AI")
             groups.extend(_run_api_providers(transcript, mode, notices))
 
-        source_file = ""
-        if DOWNLOAD_AT_ANALYSIS:
-            source_file = os.path.basename(
-                _download_source(video_url, height, stage)
+        downloaded = {}
+        if DOWNLOAD_AT_ANALYSIS and not _source_path({"video_id": video_id}):
+            tier = _needed_source_res(
+                QUALITIES[DEFAULT_QUALITY][0], aspect or DEFAULT_ASPECT
             )
+            path = _download_source(video_url, tier, stage)
+            downloaded = {
+                "source_file": os.path.basename(path), "source_res": tier
+            }
 
         with _ANALYSIS_LOCK:
             previous = exchange.load_analysis(video_id) or {}
@@ -442,7 +595,7 @@ def _analyze_worker(job_id, video_url, mode, height):
             if not any(group["clips"] for group in groups):
                 notices.append(
                     "ZOI Engine tidak menemukan kandidat pada video ini. "
-                    "Anda masih bisa memakai analisis AI eksternal di bawah."
+                    "Anda masih bisa memakai analisis Claude atau ChatGPT."
                 )
 
             exchange.save_analysis(video_id, {
@@ -452,17 +605,28 @@ def _analyze_worker(job_id, video_url, mode, height):
                 "duration": exchange.transcript_duration(transcript),
                 "language": transcript.get("language", ""),
                 "mode": mode,
-                "download_height": height,
-                "source_file": source_file or previous.get("source_file", ""),
+                "aspect": aspect or previous.get("aspect"),
+                "source_file": downloaded.get(
+                    "source_file", previous.get("source_file", "")
+                ),
+                "source_res": downloaded.get(
+                    "source_res", previous.get("source_res", 0)
+                ),
                 "updated_at": time.time(),
                 "notices": notices,
                 "groups": groups
             })
 
+        # Mode AI tanpa API key berlanjut ke halaman ekspor/impor.
+        keys = _provider_keys()
+        needs_import = mode != "zoi" and not all(
+            keys[provider] for provider in MODE_ANALYSTS[mode]
+        )
+
         _update_job(
             ANALYZE_JOBS, job_id,
             status="done", stage="Analisis selesai", progress=100,
-            video_id=video_id
+            video_id=video_id, next="ai" if needs_import else "video"
         )
 
     except Exception as error:
@@ -493,16 +657,11 @@ def analyze():
             "Masukkan link YouTube yang diawali http:// atau https://.", 400
         )
 
-    height = request.form.get("quality", DEFAULT_DOWNLOAD_HEIGHT)
-    if height not in DOWNLOAD_HEIGHTS:
-        height = DEFAULT_DOWNLOAD_HEIGHT
-
     job_id = _new_job(
-        ANALYZE_JOBS, stage="Menyiapkan", progress=None, video_id=""
+        ANALYZE_JOBS, stage="Menyiapkan", progress=None, video_id="", next=""
     )
     threading.Thread(
-        target=_analyze_worker, args=(job_id, video_url, mode, height),
-        daemon=True
+        target=_analyze_worker, args=(job_id, video_url, mode), daemon=True
     ).start()
 
     return render_template(
@@ -537,24 +696,31 @@ def _load_transcript(video_id):
     return transcript
 
 
+# ------------------------------------------- halaman 3: pilih dan render
+
 def _render_video_page(analysis, status=200, **extra):
     groups = analysis.get("groups", [])
     _mark_agreement(groups)
 
+    # Hasil AI ditampilkan lebih dulu; hasil ZOI menyusul di bawahnya.
+    ai_groups = [group for group in groups if group.get("kind") != "zoi"]
+    zoi_groups = [group for group in groups if group.get("kind") == "zoi"]
+
     source_path = _source_path(analysis)
-    height = str(analysis.get("download_height") or DEFAULT_DOWNLOAD_HEIGHT)
+    mode = analysis.get("mode", "zoi")
 
     return render_template(
         "video.html",
         video=analysis,
-        groups=groups,
-        keys=_provider_keys(),
+        groups=ai_groups + zoi_groups,
+        has_ai=bool(ai_groups),
+        ai_names=" dan ".join(item["name"] for item in _analysts_for(mode)),
         source_ready=source_path is not None,
         source_mb=_size_mb(source_path),
         can_render=source_path is not None or bool(analysis.get("url")),
-        download_height=height,
+        qualities=_quality_options(analysis, source_path),
+        default_quality=DEFAULT_QUALITY,
         renders=_list_renders(video_id=analysis["video_id"]),
-        limits=exchange,
         **extra
     ), status
 
@@ -566,6 +732,39 @@ def video_page(video_id):
         imported=request.args.get("imported", ""),
         deleted=request.args.get("deleted", "")
     )
+
+
+# ------------------------------------------ halaman 2: ekspor dan impor
+
+def _render_ai_page(analysis, status=200, **extra):
+    analysts = _analysts_for(analysis.get("mode", "zoi"))
+    counts = {
+        group["name"]: len(group.get("clips", []))
+        for group in analysis.get("groups", [])
+        if group.get("kind") == "import"
+    }
+
+    for analyst in analysts:
+        analyst["imported_count"] = counts.get(analyst["label"], 0)
+
+    context = {
+        "errors": {}, "texts": {}, "rejected": {}, "imported": [],
+        "general_error": ""
+    }
+    context.update(extra)
+
+    return render_template(
+        "ai.html",
+        video=analysis,
+        analysts=analysts,
+        limits=exchange,
+        **context
+    ), status
+
+
+@app.route("/video/<video_id>/ai")
+def ai_page(video_id):
+    return _render_ai_page(_load_video(video_id))
 
 
 @app.route("/video/<video_id>/export.json")
@@ -602,39 +801,7 @@ def export_prompt(video_id):
     )
 
 
-@app.route("/video/<video_id>/import", methods=["POST"])
-def import_analysis(video_id):
-    analysis = _load_video(video_id)
-    transcript = _load_transcript(video_id)
-
-    raw = request.form.get("json_text", "")
-    upload = request.files.get("json_file")
-
-    if upload and upload.filename:
-        raw = upload.read(exchange.MAX_IMPORT_BYTES + 1).decode(
-            "utf-8", errors="replace"
-        )
-
-    analyst = request.form.get("analyst", "claude")
-    label = {
-        "claude": "CLAUDE", "chatgpt": "CHATGPT"
-    }.get(analyst, "AI LAIN") + " (IMPOR)"
-
-    try:
-        result = exchange.validate_import(exchange.parse_import(raw), transcript)
-    except exchange.ExchangeError as error:
-        return _render_video_page(
-            analysis, 400, import_error=str(error), import_text=raw[:200000]
-        )
-
-    if not result["accepted"]:
-        return _render_video_page(
-            analysis, 400,
-            import_error="Tidak ada kandidat yang lolos validasi.",
-            import_rejected=result["rejected"],
-            import_text=raw[:200000]
-        )
-
+def _save_import_group(video_id, label, result):
     group = {
         "name": label,
         "kind": "import",
@@ -653,8 +820,63 @@ def import_analysis(video_id):
 
     _update_analysis(video_id, add_group)
 
+
+@app.route("/video/<video_id>/import", methods=["POST"])
+def import_analysis(video_id):
+    """Terima jawaban JSON dari tiap analis, validasi, lalu simpan."""
+    analysis = _load_video(video_id)
+    transcript = _load_transcript(video_id)
+
+    errors, texts, rejected, imported = {}, {}, {}, []
+    provided = False
+
+    for key, analyst in ANALYSTS.items():
+        raw = request.form.get(f"json_{key}", "")
+        upload = request.files.get(f"file_{key}")
+
+        if upload and upload.filename:
+            raw = upload.read(exchange.MAX_IMPORT_BYTES + 1).decode(
+                "utf-8", errors="replace"
+            )
+
+        if not raw.strip():
+            continue
+
+        provided = True
+
+        try:
+            result = exchange.validate_import(
+                exchange.parse_import(raw), transcript
+            )
+        except exchange.ExchangeError as error:
+            errors[key] = str(error)
+            texts[key] = raw[:200000]
+            continue
+
+        if not result["accepted"]:
+            errors[key] = "Tidak ada kandidat yang lolos validasi."
+            rejected[key] = result["rejected"]
+            texts[key] = raw[:200000]
+            continue
+
+        _save_import_group(video_id, analyst["label"], result)
+        imported.append(analyst["label"])
+
+    if not provided:
+        return _render_ai_page(
+            analysis, 400,
+            general_error="Tempel jawaban JSON terlebih dahulu."
+        )
+
+    if errors:
+        # Yang sudah benar tetap tersimpan; yang salah bisa diperbaiki.
+        return _render_ai_page(
+            exchange.load_analysis(video_id) or analysis, 400,
+            errors=errors, texts=texts, rejected=rejected, imported=imported
+        )
+
     return redirect(
-        url_for("video_page", video_id=video_id, imported=label, _anchor="impor")
+        url_for("video_page", video_id=video_id, imported=", ".join(imported))
     )
 
 
@@ -693,7 +915,10 @@ def delete_source(video_id):
         except OSError:
             pass
 
-    _update_analysis(video_id, lambda current: current.update(source_file=""))
+    _update_analysis(
+        video_id,
+        lambda current: current.update(source_file="", source_res=0)
+    )
 
     return redirect(url_for("video_page", video_id=video_id, deleted="sumber"))
 
@@ -748,6 +973,13 @@ def select():
     if not MIN_RENDER_SECONDS <= end - start <= MAX_RENDER_SECONDS:
         return "Durasi klip di luar batas yang diizinkan.", 400
 
+    quality = request.form.get("quality", DEFAULT_QUALITY).strip().rstrip("pP")
+    if quality not in QUALITIES:
+        return "Kualitas render tidak dikenal.", 400
+
+    size = QUALITIES[quality]
+    needed = _needed_source_res(size[0], _aspect(analysis))
+
     video_url = str(analysis.get("url") or "")
     if not _source_path(analysis) and not video_url:
         return (
@@ -755,13 +987,9 @@ def select():
             "Analisis ulang video ini dari halaman utama."
         ), 400
 
-    height = str(analysis.get("download_height") or DEFAULT_DOWNLOAD_HEIGHT)
-    if height not in DOWNLOAD_HEIGHTS:
-        height = DEFAULT_DOWNLOAD_HEIGHT
-
     safe_title = re.sub(r"[^a-zA-Z0-9]+", "_", title).strip("_")[:30] or "klip"
     filename = (
-        f"zoi_{video_id}_{int(start)}-{int(end)}_{safe_title}_"
+        f"zoi_{video_id}_{int(start)}-{int(end)}_{quality}p_{safe_title}_"
         f"{uuid.uuid4().hex[:6]}.mp4"
     )
     output_path = os.path.join(OUTPUT_DIR, filename)
@@ -769,7 +997,7 @@ def select():
     job_id = _new_job(
         RENDER_JOBS,
         progress=0, stage="Menunggu giliran render", status="queued",
-        step="", filename=filename, video_id=video_id
+        step="", filename=filename, video_id=video_id, quality=quality
     )
 
     def render_worker():
@@ -777,12 +1005,16 @@ def select():
             try:
                 # Diperiksa di sini, bukan saat tombol ditekan: render lain
                 # yang lebih dulu antre mungkin sudah mengunduh videonya.
-                source_path = _source_path(
-                    exchange.load_analysis(video_id) or analysis
-                )
+                current = exchange.load_analysis(video_id) or analysis
+                source_path = _source_path(current)
                 step = ""
 
-                if not source_path:
+                # Unduh bila belum ada, atau bila yang tersimpan kualitasnya
+                # terlalu rendah untuk ukuran render yang dipilih. Tanpa
+                # alamat video, pakai file yang ada apa adanya.
+                if not source_path or (
+                    video_url and _source_res(current, source_path) < needed
+                ):
                     step = "Langkah 2 dari 2"
 
                     def report(stage, progress):
@@ -797,17 +1029,13 @@ def select():
                     )
 
                     try:
-                        source_path = _download_source(video_url, height, report)
+                        source_path = _fetch_source(
+                            video_id, video_url, needed, source_path, report
+                        )
                     except Exception as error:
                         raise RuntimeError(
                             f"Video gagal diunduh: {str(error)[:500]}"
                         ) from error
-
-                    name = os.path.basename(source_path)
-                    _update_analysis(
-                        video_id,
-                        lambda current: current.update(source_file=name)
-                    )
 
                 _update_job(
                     RENDER_JOBS, job_id,
@@ -823,7 +1051,7 @@ def select():
 
                 crop_clip_local(
                     source_path, start, end, "9:16", output_path,
-                    progress_callback=update_progress
+                    progress_callback=update_progress, size=size
                 )
 
                 # 100% hanya setelah file akhir benar-benar ada.
@@ -849,7 +1077,8 @@ def select():
     return render_template(
         "render.html",
         title=title, analyst=analyst, duration=round(end - start, 1),
-        start=start, end=end, job_id=job_id, video=analysis
+        start=start, end=end, job_id=job_id, video=analysis,
+        quality=quality, size=f"{size[0]}x{size[1]}"
     )
 
 

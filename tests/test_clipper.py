@@ -153,6 +153,52 @@ class FrameRateLimitTest(unittest.TestCase):
         )
 
 
+@unittest.skipUnless(ffmpeg_available(), "FFmpeg/ffprobe tidak terpasang")
+class RenderSizeTest(unittest.TestCase):
+    """Setiap pilihan kualitas menghasilkan kanvas 9:16 berukuran tepat."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.mkdtemp()
+        cls.source = make_test_video(
+            os.path.join(cls.folder, "sumber.mp4"), seconds=6, size="640x360"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.folder, ignore_errors=True)
+
+    def test_sizes_offered(self):
+        self.assertEqual(
+            clipper.RENDER_SIZES,
+            {"240": (240, 426), "360": (360, 640), "480": (480, 854),
+             "720": (720, 1280), "1080": (1080, 1920)},
+        )
+        for width, height in clipper.RENDER_SIZES.values():
+            # H.264 yuv420p butuh ukuran genap; rasio harus 9:16.
+            self.assertEqual((width % 2, height % 2), (0, 0))
+            self.assertAlmostEqual(width / height, 9 / 16, delta=0.002)
+
+    def test_every_size_renders_with_audio(self):
+        for quality, size in clipper.RENDER_SIZES.items():
+            target = os.path.join(self.folder, f"hasil_{quality}.mp4")
+            clipper.crop_clip_local(
+                self.source, 1, 5, "9:16", target, size=size
+            )
+            streams = probe(target)
+            self.assertEqual(
+                (streams["video"]["width"], streams["video"]["height"]), size
+            )
+            self.assertEqual(streams["audio"]["codec"], "aac")
+            self.assertAlmostEqual(streams["video"]["duration"], 4.0, delta=0.5)
+
+    def test_without_size_the_default_is_720x1280(self):
+        target = os.path.join(self.folder, "bawaan.mp4")
+        clipper.crop_clip_local(self.source, 1, 5, "9:16", target)
+        video = probe(target)["video"]
+        self.assertEqual((video["width"], video["height"]), (720, 1280))
+
+
 class PriorityTest(unittest.TestCase):
     def test_ffmpeg_runs_at_low_priority_when_nice_exists(self):
         command = clipper._with_low_priority(["ffmpeg", "-y"])

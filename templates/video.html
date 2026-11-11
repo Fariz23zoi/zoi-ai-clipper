@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block title %}{{ video.title }} - ZOI AI CLIPPER{% endblock %}
+{% set chosen = qualities|selectattr('id', 'equalto', default_quality)|first %}
 {% block content %}
 <section class="card">
+  <p class="step">{% if video.mode != 'zoi' %}Langkah 3 dari 3{% else %}Langkah 2 dari 2{% endif %} &middot; Pilih klip untuk dirender</p>
   <h1 style="overflow-wrap:anywhere">{{ video.title }}</h1>
   <div class="meta">
     <span class="chip">Durasi {{ video.duration|hms }}</span>
@@ -13,13 +15,11 @@
     <span class="small">Video sumber tersimpan di HP ({{ source_mb }} MB).</span>
     <form method="POST" action="{{ url_for('delete_source', video_id=video.video_id) }}"
           data-confirm="Hapus video sumber ({{ source_mb }} MB)? Kandidat tetap tersimpan. Video diunduh lagi bila Anda merender."
-              onsubmit="return confirm(this.dataset.confirm)">
+          onsubmit="return confirm(this.dataset.confirm)">
       <button class="btn danger inline" type="submit">Hapus video sumber</button>
     </form>
   </div>
-  {% elif can_render %}
-  <p class="muted" style="margin:10px 0 0">Video belum diunduh. Unduhan {{ download_height }}p dimulai otomatis saat Anda menekan Render klip ini.</p>
-  {% else %}
+  {% elif not can_render %}
   <p class="warn">Alamat video tidak tersimpan. Analisis ulang dari halaman utama sebelum merender.</p>
   {% endif %}
 </section>
@@ -27,16 +27,41 @@
 {% if page_error %}<div class="alert bad" role="alert">{{ page_error }}</div>{% endif %}
 {% if deleted == 'sumber' %}<div class="alert ok" role="status">Video sumber dihapus. Kandidat tetap tersimpan.</div>{% endif %}
 {% if deleted == 'klip' %}<div class="alert ok" role="status">Klip dihapus.</div>{% endif %}
-
 {% if imported %}
-<div class="alert ok" role="status">Kandidat dari {{ imported }} berhasil diimpor dan divalidasi. <a href="#impor">Lihat kandidatnya</a></div>
+<div class="alert ok" role="status">Kandidat dari {{ imported }} berhasil diimpor dan divalidasi.</div>
 {% endif %}
 {% for notice in video.notices %}
 <div class="alert info">{{ notice }}</div>
 {% endfor %}
+{% if video.mode != 'zoi' and not has_ai %}
+<div class="alert info">Belum ada hasil analisis {{ ai_names }} untuk video ini. Kandidat di bawah berasal dari ZOI Engine.
+  <a class="btn inline" style="margin-top:10px" href="{{ url_for('ai_page', video_id=video.video_id) }}">Impor analisis {{ ai_names }}</a>
+</div>
+{% endif %}
+
+<section class="card">
+  <fieldset class="plain">
+    <legend>Kualitas render</legend>
+    <div class="seg" id="quality">
+      {% for item in qualities %}
+      <label>
+        <input class="sr-only" type="radio" name="quality-choice" value="{{ item.id }}"
+               data-size="{{ item.size }}" data-source="{{ item.source }}" data-ready="{{ '1' if item.ready else '' }}"
+               {% if item.id == default_quality %}checked{% endif %}>
+        <span>{{ item.id }}p</span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <p class="muted" id="quality-note" style="margin:10px 0 0">Hasil {{ chosen.size }}.
+    {% if chosen.ready %}Video sumber sudah tersimpan, jadi render langsung jalan.
+    {% elif source_ready %}Video sumber diunduh ulang pada kualitas {{ chosen.source }}p saat render.
+    {% else %}Video sumber {{ chosen.source }}p diunduh saat render pertama.{% endif %}</p>
+  <p class="muted" style="margin:6px 0 0">Makin tinggi kualitasnya, makin lama unduhan dan render. Pilihan ini berlaku untuk semua tombol Render di bawah.</p>
+</section>
 
 {% for group in groups %}
-<details class="card" {% if group.name == imported %}id="impor"{% endif %} {% if loop.first or group.kind != 'zoi' %}open{% endif %}>
+<details class="card" {% if loop.first or group.kind != 'zoi' %}open{% endif %}>
   <summary><span>{{ group.name }} <span class="muted">({{ group.clips|length }})</span></span></summary>
 
   {% for warning in group.file_warnings %}
@@ -65,6 +90,7 @@
       <input type="hidden" name="analyst" value="{{ group.name }}">
       <input type="hidden" name="start_time" value="{{ clip.start_time }}">
       <input type="hidden" name="end_time" value="{{ clip.end_time }}">
+      <input type="hidden" name="quality" value="{{ default_quality }}" class="quality-field">
       <button class="btn" type="submit" {% if not can_render %}disabled{% endif %}>Render klip ini</button>
     </form>
   </article>
@@ -88,54 +114,16 @@
 </details>
 {% endfor %}
 
+{% if groups|length > 1 %}
 <p class="muted" style="margin-top:12px">Skor tiap analis memakai skala sendiri, jadi jangan dibandingkan antar-kelompok.</p>
+{% endif %}
 
-<details class="card" id="ai" {% if import_error or video.mode != 'zoi' %}open{% endif %}>
-  <summary><span>Analisis AI eksternal (tanpa API key)</span></summary>
-  <p class="muted" style="margin-top:8px">ZOI tidak mengirim transkrip ke layanan AI mana pun. Anda sendiri yang membawa data ke Claude dan membawa jawabannya kembali.</p>
-
-  <ol class="steps">
-    <li><strong>Salin prompt.</strong> Isinya instruksi dan seluruh transkrip video ini.
-      <div class="btn-row" style="margin-top:8px">
-        <button class="btn inline" type="button" id="copy-prompt">Salin prompt</button>
-        <a class="btn secondary inline" href="{{ url_for('export_prompt', video_id=video.video_id, dl=1) }}">Unduh prompt (.txt)</a>
-        <a class="btn secondary inline" href="{{ url_for('export_json', video_id=video.video_id) }}">Unduh data (.json)</a>
-      </div>
-      <p class="small" id="copy-status" role="status" style="margin:6px 0 0"></p>
-    </li>
-    <li><strong>Tempel ke Claude</strong> (aplikasi Claude, Claude Code, atau AI lain) dan tunggu jawaban berupa JSON.</li>
-    <li><strong>Tempel jawabannya di bawah</strong>, lalu tekan Impor. ZOI memeriksa setiap timestamp sebelum menampilkannya.</li>
-  </ol>
-
-  {% if import_error %}
-  <div class="alert bad" role="alert">{{ import_error }}
-    {% if import_rejected %}
-    <ul>{% for item in import_rejected %}<li>#{{ item.index }} {{ item.title }}: {{ item.reason }}</li>{% endfor %}</ul>
-    {% endif %}
-  </div>
-  {% endif %}
-
-  <form method="POST" action="{{ url_for('import_analysis', video_id=video.video_id) }}"
-        enctype="multipart/form-data" style="margin-top:12px">
-    <label class="field" for="analyst">Sumber analisis</label>
-    <select id="analyst" name="analyst">
-      <option value="claude" {% if video.mode != 'chatgpt' %}selected{% endif %}>Claude</option>
-      <option value="chatgpt" {% if video.mode == 'chatgpt' %}selected{% endif %}>ChatGPT</option>
-      <option value="other">AI lain</option>
-    </select>
-
-    <label class="field" for="json_text" style="margin-top:12px">Jawaban JSON</label>
-    <textarea id="json_text" name="json_text" spellcheck="false"
-              placeholder='{"schema": "zoi.import.v1", "highlights": [ ... ]}'>{{ import_text or '' }}</textarea>
-
-    <label class="field" for="json_file" style="margin-top:12px">Atau unggah file .json</label>
-    <input type="file" id="json_file" name="json_file" accept=".json,.txt,application/json,text/plain">
-
-    <p class="muted">Kandidat harus {{ limits.MIN_DURATION|int }}&ndash;{{ limits.MAX_DURATION|int }} detik,
-      berada di dalam durasi video, dan tidak saling tumpang tindih. Maksimal {{ limits.MAX_CANDIDATES }} kandidat.</p>
-    <button class="btn" type="submit">Impor dan validasi</button>
-  </form>
-</details>
+<section class="card">
+  <h2>Analisis {{ ai_names }}</h2>
+  <p class="muted">{% if has_ai %}Ingin mengganti atau menambah hasil analisis AI?{% else %}Minta {{ ai_names }} memilih klip dari video ini, tanpa API key.{% endif %}</p>
+  <a class="btn secondary" href="{{ url_for('ai_page', video_id=video.video_id) }}">
+    {% if has_ai %}Impor ulang analisis AI{% else %}Analisis dengan {{ ai_names }}{% endif %}</a>
+</section>
 
 {% if renders %}
 <section class="card">
@@ -168,44 +156,37 @@
 {% block scripts %}
 <script>
 (function () {
-  var button = document.getElementById("copy-prompt");
-  var status = document.getElementById("copy-status");
-  if (!button) { return; }
+  var radios = document.querySelectorAll('input[name="quality-choice"]');
+  var fields = document.querySelectorAll(".quality-field");
+  var note = document.getElementById("quality-note");
+  var hasSource = {{ 'true' if source_ready else 'false' }};
+  var KEY = "zoi-kualitas-render";
 
-  function fallbackCopy(text) {
-    var area = document.createElement("textarea");
-    area.value = text;
-    area.setAttribute("readonly", "");
-    area.style.position = "fixed";
-    area.style.top = "-1000px";
-    document.body.appendChild(area);
-    area.select();
-    var ok = false;
-    try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
-    document.body.removeChild(area);
-    return ok;
+  function apply(radio) {
+    fields.forEach(function (field) { field.value = radio.value; });
+    var text = "Hasil " + radio.dataset.size + ". ";
+    if (radio.dataset.ready) {
+      text += "Video sumber sudah tersimpan, jadi render langsung jalan.";
+    } else if (hasSource) {
+      text += "Video sumber diunduh ulang pada kualitas " + radio.dataset.source + "p saat render.";
+    } else {
+      text += "Video sumber " + radio.dataset.source + "p diunduh saat render pertama.";
+    }
+    note.textContent = text;
   }
 
-  button.addEventListener("click", async function () {
-    button.disabled = true;
-    status.textContent = "Menyiapkan prompt...";
-    try {
-      var response = await fetch("{{ url_for('export_prompt', video_id=video.video_id) }}", {cache: "no-store"});
-      if (!response.ok) { throw new Error("gagal"); }
-      var text = await response.text();
-      var ok = false;
-      if (navigator.clipboard && window.isSecureContext) {
-        try { await navigator.clipboard.writeText(text); ok = true; } catch (error) { ok = false; }
-      }
-      if (!ok) { ok = fallbackCopy(text); }
-      status.textContent = ok
-        ? "Prompt tersalin (" + text.length.toLocaleString("id-ID") + " karakter). Tempel ke Claude."
-        : "Browser menolak menyalin. Gunakan tombol Unduh prompt.";
-    } catch (error) {
-      status.textContent = "Prompt gagal diambil. Gunakan tombol Unduh prompt.";
-    }
-    button.disabled = false;
+  var saved = null;
+  try { saved = window.localStorage.getItem(KEY); } catch (error) { saved = null; }
+
+  radios.forEach(function (radio) {
+    if (saved && radio.value === saved) { radio.checked = true; }
+    radio.addEventListener("change", function () {
+      apply(radio);
+      try { window.localStorage.setItem(KEY, radio.value); } catch (error) { /* tanpa penyimpanan */ }
+    });
   });
+
+  radios.forEach(function (radio) { if (radio.checked) { apply(radio); } });
 })();
 </script>
 {% endblock %}

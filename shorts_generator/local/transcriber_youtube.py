@@ -356,6 +356,9 @@ def transcribe_from_youtube(
         "video_id": video_id,
         "url": info.get("webpage_url") or video_url,
         "channel": info.get("channel") or info.get("uploader") or "",
+        # Ukuran video, untuk menentukan kualitas sumber yang dibutuhkan.
+        "width": info.get("width"),
+        "height": info.get("height"),
         "duration": float(
             info.get("duration")
             or max(s["end"] for s in segments)

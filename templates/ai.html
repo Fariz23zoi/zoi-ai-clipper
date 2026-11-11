@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Analisis AI - ZOI AI CLIPPER{% endblock %}
+{% set names = analysts|map(attribute='name')|join(' dan ') %}
+{% set already = analysts|selectattr('imported_count')|list %}
+{% block content %}
+<section class="card">
+  <p class="step">{% if video.mode != 'zoi' %}Langkah 2 dari 3{% else %}Opsional{% endif %} &middot; Analisis {{ names }}</p>
+  <h1 style="overflow-wrap:anywhere">{{ video.title }}</h1>
+  <p class="muted" style="margin:0">Minta {{ names }} memilih klip terbaik, tanpa API key.
+    ZOI tidak mengirim transkrip ke layanan AI mana pun; Anda sendiri yang menyalin dan menempelnya.</p>
+</section>
+
+{% for label in imported %}
+<div class="alert ok" role="status">Kandidat dari {{ label }} berhasil diimpor.</div>
+{% endfor %}
+{% if general_error %}<div class="alert bad" role="alert">{{ general_error }}</div>{% endif %}
+
+<section class="card">
+  <h2>1. Salin prompt</h2>
+  <p class="muted">Isinya instruksi dan seluruh transkrip video ini.</p>
+  <button class="btn" type="button" id="copy-prompt">Salin prompt</button>
+  <p class="small" id="copy-status" role="status" style="margin:8px 0 0"></p>
+</section>
+
+<section class="card">
+  <h2>2. Tempel ke {{ names }}</h2>
+  <p class="muted">Tempel prompt tadi, kirim, lalu salin seluruh jawabannya. Jawabannya berupa JSON.</p>
+  <div class="btn-row">
+    {% for analyst in analysts %}
+    <a class="btn secondary" href="{{ analyst.url }}" target="_blank" rel="noopener">Buka {{ analyst.name }}</a>
+    {% endfor %}
+  </div>
+</section>
+
+<form class="card" method="POST" action="{{ url_for('import_analysis', video_id=video.video_id) }}"
+      enctype="multipart/form-data">
+  <h2>3. Tempel jawabannya di sini</h2>
+  {% if analysts|length > 1 %}
+  <p class="muted">Isi salah satu atau keduanya.</p>
+  {% endif %}
+
+  {% for analyst in analysts %}
+  <label class="field" for="json_{{ analyst.id }}" {% if not loop.first %}style="margin-top:14px"{% endif %}>Jawaban {{ analyst.name }}</label>
+  {% if analyst.imported_count %}
+  <p class="muted" style="margin:0 0 6px">Sudah ada {{ analyst.imported_count }} kandidat dari {{ analyst.name }}. Mengimpor lagi akan menggantinya.</p>
+  {% endif %}
+  <textarea id="json_{{ analyst.id }}" name="json_{{ analyst.id }}" spellcheck="false"
+            placeholder='{"schema": "zoi.import.v1", "highlights": [ ... ]}'>{{ texts.get(analyst.id, '') }}</textarea>
+  {% if errors.get(analyst.id) %}
+  <div class="alert bad" role="alert" style="margin-top:8px">{{ errors[analyst.id] }}
+    {% if rejected.get(analyst.id) %}
+    <ul>{% for item in rejected[analyst.id] %}<li>#{{ item.index }} {{ item.title }}: {{ item.reason }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% endfor %}
+
+  <p class="muted" style="margin-top:10px">ZOI memeriksa setiap kandidat: durasi {{ limits.MIN_DURATION|int }}&ndash;{{ limits.MAX_DURATION|int }} detik,
+    berada di dalam durasi video, dan tidak saling tumpang tindih. Maksimal {{ limits.MAX_CANDIDATES }} kandidat.</p>
+  <button class="btn" type="submit">Impor dan lihat hasil</button>
+
+  <details>
+    <summary><span class="small">Pilihan lain: pakai file</span></summary>
+    <p class="muted">Berguna bila transkrip terlalu panjang untuk ditempel.</p>
+    <div class="btn-row">
+      <a class="btn secondary inline" href="{{ url_for('export_prompt', video_id=video.video_id, dl=1) }}">Unduh prompt (.txt)</a>
+      <a class="btn secondary inline" href="{{ url_for('export_json', video_id=video.video_id) }}">Unduh data (.json)</a>
+    </div>
+    {% for analyst in analysts %}
+    <label class="field" for="file_{{ analyst.id }}" style="margin-top:12px">Unggah jawaban {{ analyst.name }} (.json)</label>
+    <input type="file" id="file_{{ analyst.id }}" name="file_{{ analyst.id }}" accept=".json,.txt,application/json,text/plain">
+    {% endfor %}
+  </details>
+</form>
+
+<a class="btn secondary" style="margin-top:14px" href="{{ url_for('video_page', video_id=video.video_id) }}">
+  {% if already or imported %}Lihat hasil analisis{% else %}Lewati, pakai hasil ZOI Engine{% endif %}</a>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var button = document.getElementById("copy-prompt");
+  var status = document.getElementById("copy-status");
+
+  function fallbackCopy(text) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
+    document.body.removeChild(area);
+    return ok;
+  }
+
+  button.addEventListener("click", async function () {
+    button.disabled = true;
+    status.textContent = "Menyiapkan prompt...";
+    try {
+      var response = await fetch("{{ url_for('export_prompt', video_id=video.video_id) }}", {cache: "no-store"});
+      if (!response.ok) { throw new Error("gagal"); }
+      var text = await response.text();
+      var ok = false;
+      if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(text); ok = true; } catch (error) { ok = false; }
+      }
+      if (!ok) { ok = fallbackCopy(text); }
+      status.textContent = ok
+        ? "Prompt tersalin (" + text.length.toLocaleString("id-ID") + " karakter). Lanjut ke langkah 2."
+        : "Browser menolak menyalin. Buka \"Pilihan lain\" di bawah dan unduh prompt.";
+    } catch (error) {
+      status.textContent = "Prompt gagal diambil. Buka \"Pilihan lain\" di bawah dan unduh prompt.";
+    }
+    button.disabled = false;
+  });
+})();
+</script>
+{% endblock %}

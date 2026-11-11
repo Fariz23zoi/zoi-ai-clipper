@@ -64,7 +64,9 @@
       var data = await response.json();
       show(data);
       if (data.status === "done") {
-        window.location.href = "{{ url_for('home') }}video/" + encodeURIComponent(data.video_id);
+        // Mode AI tanpa API key lanjut ke halaman ekspor/impor.
+        window.location.href = "{{ url_for('home') }}video/" + encodeURIComponent(data.video_id)
+          + (data.next === "ai" ? "/ai" : "");
         return;
       }
       if (data.status === "error") {

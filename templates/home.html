@@ -3,6 +3,7 @@
 {% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
 
 <form class="card" method="POST" action="{{ url_for('analyze') }}">
+  <p class="step">Langkah 1 &middot; Tempel link</p>
   <h1>Buat video Shorts</h1>
   <p class="muted">Tempel link YouTube. Video harus memiliki subtitle/CC bahasa Indonesia atau Inggris.
     Analisis hanya mengambil subtitle; video baru diunduh saat Anda merender klip.</p>
@@ -15,32 +16,27 @@
     <legend>Mode analisis</legend>
     <label class="mode">
       <input class="sr-only" type="radio" name="mode" value="zoi" checked>
-      <span class="body"><strong>ZOI</strong><small>Analisis lokal ZOI Engine</small></span>
+      <span class="body"><strong>ZOI</strong><small>Analisis lokal, langsung ke daftar klip</small></span>
     </label>
     <label class="mode">
       <input class="sr-only" type="radio" name="mode" value="claude">
       <span class="body"><strong>Claude</strong>
-        <small>{% if keys.claude %}ZOI + Claude lewat API{% else %}ZOI + ekspor/impor JSON, tanpa API key{% endif %}</small></span>
+        <small>{% if keys.claude %}Analisis Claude lewat API{% else %}Salin prompt ke Claude, tempel jawabannya{% endif %}</small></span>
     </label>
     <label class="mode">
       <input class="sr-only" type="radio" name="mode" value="chatgpt">
       <span class="body"><strong>ChatGPT</strong>
-        <small>{% if keys.chatgpt %}ZOI + ChatGPT lewat API{% else %}ZOI + ekspor/impor JSON, tanpa API key{% endif %}</small></span>
+        <small>{% if keys.chatgpt %}Analisis ChatGPT lewat API{% else %}Salin prompt ke ChatGPT, tempel jawabannya{% endif %}</small></span>
     </label>
     <label class="mode">
       <input class="sr-only" type="radio" name="mode" value="hybrid">
-      <span class="body"><strong>Hybrid</strong><small>ZOI dan AI eksternal berdampingan</small></span>
+      <span class="body"><strong>Hybrid</strong><small>Claude dan ChatGPT sekaligus</small></span>
     </label>
   </fieldset>
 
-  <label class="field" for="quality" style="margin-top:16px">Kualitas video sumber</label>
-  <select id="quality" name="quality">
-    <option value="480" {% if default_height == '480' %}selected{% endif %}>Ringan (480p), disarankan untuk HP</option>
-    <option value="720" {% if default_height == '720' %}selected{% endif %}>Tajam (720p), unduhan dan render lebih berat</option>
-  </select>
-  <p class="muted" style="margin-top:6px">Hasil akhir tetap 720x1280 pada kedua pilihan.</p>
+  <p class="muted" style="margin:12px 0 0">{% if not keys.claude and not keys.chatgpt %}Mode Claude, ChatGPT, dan Hybrid berjalan tanpa API key. {% endif %}Kualitas render dipilih di langkah terakhir.</p>
 
-  <button class="btn" type="submit" style="margin-top:10px">Analisis video</button>
+  <button class="btn" type="submit" style="margin-top:12px">Analisis video</button>
 </form>
 
 {% if videos %}
