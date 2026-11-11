@@ -21,10 +21,19 @@ Buka `http://127.0.0.1:5000` di browser HP. Untuk membuka dari perangkat lain di
 ## Alur pakai
 
 1. Tempel link YouTube, pilih mode, tekan **Analisis video**. Video harus punya subtitle/CC bahasa Indonesia atau Inggris.
-2. Halaman progres menampilkan tahap: subtitle, analisis, unduhan (dengan persentase nyata dari yt-dlp).
+2. Analisis hanya mengambil subtitle, jadi cepat dan hemat kuota. Video belum diunduh pada tahap ini.
 3. Halaman kandidat menampilkan hasil **ZOI Engine V4.1** dan **V4.2 (eksperimental)**.
-4. Tekan **Render klip ini** pada kandidat pilihan. Persentase berasal dari progres FFmpeg.
+4. Tekan **Render klip ini** pada kandidat pilihan. Pada render pertama, video diunduh dulu (Langkah 1 dari 2, persentase dari yt-dlp), lalu dirender (Langkah 2 dari 2, persentase dari FFmpeg). Render berikutnya dari video yang sama langsung jalan.
 5. Putar atau unduh hasilnya. File tersimpan di `output/` dengan awalan `zoi_`.
+
+## Supaya ringan di HP
+
+- **Kualitas video sumber.** Pilihan bawaan adalah Ringan (480p). Hasil akhir tetap 720x1280: bagian video di tengah selebar 720 piksel, sedangkan sumber 480p selebar 854 piksel, jadi masih cukup. Pilih Tajam (720p) bila ingin gambar lebih tajam dan HP sanggup.
+- **Unduhan dipilih yang ringan.** Aplikasi meminta video paling banyak 30 fps dengan codec H.264.
+- **Render dibatasi 30 fps.** Video sumber 50/60 fps dirender separuhnya (25/30 fps).
+- **FFmpeg berjalan dengan prioritas rendah**, supaya HP tetap bisa dipakai selama rendering.
+- **Kosongkan penyimpanan.** Di halaman video ada tombol **Hapus video sumber**. Kandidat tetap tersimpan, dan video diunduh lagi bila Anda merender. Klip hasil render juga bisa dihapus dari daftar.
+- **Saran pemakaian.** Render satu klip pada satu waktu (aplikasi sudah mengantrekannya), tutup aplikasi lain yang berat, dan jalankan `termux-wake-lock` sebelum `python app.py` agar Android tidak menghentikan Termux saat layar mati.
 
 ## Analisis dengan Claude tanpa API key
 
@@ -70,7 +79,7 @@ Format jawaban yang diterima:
 
 | Lokasi | Isi |
 |---|---|
-| `output/source_<id>.mp4` | Video sumber (tidak pernah dihapus aplikasi) |
+| `output/source_<id>.mp4` | Video sumber (hanya terhapus bila Anda menekan Hapus video sumber) |
 | `output/zoi_<id>_<mulai>-<selesai>_<judul>_<acak>.mp4` | Hasil render |
 | `output/data/<id>/transcript.json` | Transkrip tersimpan |
 | `output/data/<id>/analysis.json` | Kandidat ZOI dan hasil impor |
@@ -93,4 +102,8 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_PORT` | `5000` | Port dashboard |
 | `ZOI_RENDER_PRESET` | `veryfast` | `ultrafast` lebih cepat, file lebih besar |
 | `ZOI_RENDER_CRF` | `23` | Lebih kecil = kualitas lebih tinggi |
+| `ZOI_RENDER_MAX_FPS` | `30` | Batas fps hasil render; `0` = ikut sumber |
+| `ZOI_RENDER_NICE` | `10` | Prioritas FFmpeg (0-19); `0` = prioritas normal |
+| `ZOI_DOWNLOAD_HEIGHT` | `480` | Kualitas sumber bawaan: `480` atau `720` |
+| `ZOI_DOWNLOAD_AT_ANALYSIS` | kosong | Isi `1` bila video ingin langsung diunduh saat analisis |
 | `LOCAL_OUTPUT_DIR` | `output` | Folder hasil |

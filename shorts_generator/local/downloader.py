@@ -23,16 +23,30 @@ def _import_ytdlp():
     return yt_dlp
 
 
-def _format_for(fmt: str) -> str:
-    """Map our '720' / '1080' shorthand to a yt-dlp format selector."""
+def _format_options(fmt: str) -> dict:
+    """Opsi yt-dlp untuk memilih sumber yang ringan diproses.
+
+    `fmt` adalah resolusi yang diinginkan ('480', '720', ...). Yang dipilih:
+    resolusi terbesar yang tidak melebihi angka itu, paling banyak 30 fps,
+    dan codec H.264. Sumber 60 fps hampir menggandakan waktu render, dan
+    H.264 adalah codec yang paling ringan didekode serta selalu tersedia.
+
+    `res` di yt-dlp adalah sisi terpendek, jadi aturan ini berlaku untuk
+    video mendatar maupun tegak. Bila pilihan ringan tidak tersedia,
+    yt-dlp mengambil yang paling mendekati.
+    """
     try:
-        height = int(fmt)
-    except ValueError:
-        height = 720
-    return (
-        f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/"
-        f"best[height<={height}][ext=mp4]/best"
-    )
+        target = int(fmt)
+    except (TypeError, ValueError):
+        target = 720
+
+    return {
+        "format": (
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/"
+            "bestvideo+bestaudio/best"
+        ),
+        "format_sort": [f"res:{target}", "fps:30", "vcodec:h264"],
+    }
 
 
 def _extract_youtube_video_id(source: str) -> Optional[str]:
@@ -113,7 +127,7 @@ def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[s
 
     print(f"[download/local] {video_url} @ {fmt}p → {out_dir}/", flush=True)
     ydl_opts = {
-        "format": _format_for(fmt),
+        **_format_options(fmt),
         "outtmpl": os.path.join(out_dir, "source_%(id)s.%(ext)s"),
         "merge_output_format": "mp4",
         "quiet": True,

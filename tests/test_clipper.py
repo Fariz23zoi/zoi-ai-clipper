@@ -80,5 +80,96 @@ class RenderTest(unittest.TestCase):
                     os.remove(path)
 
 
+def _frame_rate(path):
+    import subprocess
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=avg_frame_rate", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    number, _, divisor = out.partition("/")
+    return float(number) / float(divisor or 1)
+
+
+def _make_source(path, rate):
+    import subprocess
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error",
+         "-f", "lavfi", "-i", f"testsrc=size=640x360:rate={rate}",
+         "-f", "lavfi", "-i", "sine=frequency=440", "-t", "6",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-c:a", "aac", str(path)],
+        check=True,
+    )
+    return str(path)
+
+
+@unittest.skipUnless(ffmpeg_available(), "FFmpeg/ffprobe tidak terpasang")
+class FrameRateLimitTest(unittest.TestCase):
+    """Sumber 50/60 fps dirender separuhnya; sumber biasa tidak diubah."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.mkdtemp()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.folder, ignore_errors=True)
+
+    def render(self, rate):
+        source = _make_source(os.path.join(self.folder, f"s{rate}.mp4"), rate)
+        target = os.path.join(self.folder, f"o{rate}.mp4")
+        clipper.crop_clip_local(source, 0, 5, "9:16", target)
+        return _frame_rate(target), clipper._fps_limit_filter(source)
+
+    def test_60fps_source_is_rendered_at_30(self):
+        rate, limit = self.render(60)
+        self.assertAlmostEqual(rate, 30, delta=0.5)
+        self.assertEqual(limit, "fps=60/2,")
+
+    def test_50fps_source_is_rendered_at_25(self):
+        rate, limit = self.render(50)
+        self.assertAlmostEqual(rate, 25, delta=0.5)
+        self.assertEqual(limit, "fps=50/2,")
+
+    def test_30_and_25fps_sources_are_left_alone(self):
+        for source_rate in (30, 25):
+            rate, limit = self.render(source_rate)
+            self.assertAlmostEqual(rate, source_rate, delta=0.5)
+            self.assertEqual(limit, "")
+
+    def test_limit_can_be_turned_off(self):
+        source = _make_source(os.path.join(self.folder, "bebas.mp4"), 60)
+        saved = clipper.RENDER_MAX_FPS
+        clipper.RENDER_MAX_FPS = 0
+        try:
+            self.assertEqual(clipper._fps_limit_filter(source), "")
+        finally:
+            clipper.RENDER_MAX_FPS = saved
+
+    def test_unreadable_file_is_left_alone(self):
+        self.assertEqual(
+            clipper._fps_limit_filter(os.path.join(self.folder, "tidak_ada.mp4")), ""
+        )
+
+
+class PriorityTest(unittest.TestCase):
+    def test_ffmpeg_runs_at_low_priority_when_nice_exists(self):
+        command = clipper._with_low_priority(["ffmpeg", "-y"])
+        if shutil.which("nice"):
+            self.assertEqual(command[:3], ["nice", "-n", str(clipper.RENDER_NICE)])
+        self.assertEqual(command[-2:], ["ffmpeg", "-y"])
+
+    def test_priority_change_can_be_turned_off(self):
+        saved = clipper.RENDER_NICE
+        clipper.RENDER_NICE = 0
+        try:
+            self.assertEqual(
+                clipper._with_low_priority(["ffmpeg", "-y"]), ["ffmpeg", "-y"]
+            )
+        finally:
+            clipper.RENDER_NICE = saved
+
+
 if __name__ == "__main__":
     unittest.main()

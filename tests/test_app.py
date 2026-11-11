@@ -26,33 +26,55 @@ class DashboardTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.folder = tempfile.mkdtemp()
+        cls.spare = tempfile.mkdtemp()
         cls.saved = (
             zoi_app.OUTPUT_DIR, exchange.DATA_DIR,
             zoi_app.download_youtube_local, zoi_app.transcribe_from_youtube,
             zoi_app.CLAUDE_API_KEY, zoi_app.OPENAI_API_KEY,
+            zoi_app.DOWNLOAD_AT_ANALYSIS,
         )
+        zoi_app.DOWNLOAD_AT_ANALYSIS = False
         zoi_app.OUTPUT_DIR = cls.folder
         exchange.DATA_DIR = os.path.join(cls.folder, "data")
         zoi_app.CLAUDE_API_KEY = ""
         zoi_app.OPENAI_API_KEY = ""
 
         cls.source = os.path.join(cls.folder, f"source_{VIDEO_ID}.mp4")
+        cls.pristine = os.path.join(cls.spare, "asli.mp4")
         cls.has_ffmpeg = ffmpeg_available()
         if cls.has_ffmpeg:
-            make_test_video(cls.source, seconds=40)
+            make_test_video(cls.pristine, seconds=40)
         else:
-            open(cls.source, "wb").close()
+            open(cls.pristine, "wb").close()
+        shutil.copyfile(cls.pristine, cls.source)
+        cls.downloads = []
+        cls.download_error = None
 
         transcript = sample_transcript()
         # Samakan durasi dengan video uji agar klip bisa dirender.
         cls.transcript = transcript
 
-        def fake_download(url, progress_hook=None, **_):
+        def fake_download(url, fmt="720", out_dir=None, progress_hook=None):
+            """Meniru yt-dlp: melapor progres lalu menaruh file di output."""
+            cls.downloads.append({"url": url, "fmt": fmt, "out_dir": out_dir})
+
+            if cls.download_error:
+                raise RuntimeError(cls.download_error)
+
+            for done in (10, 40, 70, 100):
+                if progress_hook:
+                    progress_hook({
+                        "status": "downloading",
+                        "downloaded_bytes": done, "total_bytes": 100,
+                        "info_dict": {"vcodec": "avc1.4d401f"},
+                    })
+                time.sleep(0.12)
+
             if progress_hook:
-                progress_hook({
-                    "status": "downloading",
-                    "downloaded_bytes": 50, "total_bytes": 100,
-                })
+                progress_hook({"status": "finished"})
+
+            if not os.path.exists(cls.source):
+                shutil.copyfile(cls.pristine, cls.source)
             return cls.source
 
         zoi_app.download_youtube_local = fake_download
@@ -65,8 +87,10 @@ class DashboardTest(unittest.TestCase):
             zoi_app.OUTPUT_DIR, exchange.DATA_DIR,
             zoi_app.download_youtube_local, zoi_app.transcribe_from_youtube,
             zoi_app.CLAUDE_API_KEY, zoi_app.OPENAI_API_KEY,
+            zoi_app.DOWNLOAD_AT_ANALYSIS,
         ) = cls.saved
         shutil.rmtree(cls.folder, ignore_errors=True)
+        shutil.rmtree(cls.spare, ignore_errors=True)
 
     # ---- alat bantu
 
@@ -81,11 +105,14 @@ class DashboardTest(unittest.TestCase):
             time.sleep(0.1)
         self.fail(f"job tidak selesai: {seen[-1]}")
 
-    def analyze(self, mode="zoi"):
-        page = self.client.post("/analyze", data={
+    def analyze(self, mode="zoi", quality=None):
+        form = {
             "youtube_url": f"https://www.youtube.com/watch?v={VIDEO_ID}",
             "mode": mode,
-        })
+        }
+        if quality:
+            form["quality"] = quality
+        page = self.client.post("/analyze", data=form)
         self.assertEqual(page.status_code, 200)
         html = page.get_data(as_text=True)
         job_id = html.split("/analyze/status/")[1].split('"')[0]
@@ -122,6 +149,8 @@ class DashboardTest(unittest.TestCase):
         for mode in ("zoi", "claude", "chatgpt", "hybrid"):
             self.assertIn(f'value="{mode}"', html)
         self.assertIn('name="youtube_url"', html)
+        self.assertIn('name="quality"', html)
+        self.assertIn('value="480" selected', html)
 
     def test_02_bad_input_shows_error(self):
         response = self.client.post(
@@ -156,8 +185,31 @@ class DashboardTest(unittest.TestCase):
         self.assertIn("Hook", html)
 
         analysis = exchange.load_analysis(VIDEO_ID)
-        self.assertEqual(analysis["source_file"], f"source_{VIDEO_ID}.mp4")
+        self.assertEqual(analysis["download_height"], "480")
         self.assertTrue(exchange.load_transcript(VIDEO_ID)["segments"])
+        # Analisis hanya memakai subtitle: tidak ada unduhan video.
+        self.assertEqual(self.downloads, [])
+
+    def test_13_download_at_analysis_is_optional(self):
+        zoi_app.DOWNLOAD_AT_ANALYSIS = True
+        try:
+            data = self.analyze("zoi", quality="720")
+        finally:
+            zoi_app.DOWNLOAD_AT_ANALYSIS = False
+
+        self.assertEqual(data["status"], "done", data)
+        self.assertEqual(len(self.downloads), 1)
+        self.assertEqual(self.downloads[0]["fmt"], "720")
+        analysis = exchange.load_analysis(VIDEO_ID)
+        self.assertEqual(analysis["download_height"], "720")
+        self.assertEqual(analysis["source_file"], f"source_{VIDEO_ID}.mp4")
+        del self.downloads[:]
+
+    def test_14_unknown_quality_falls_back_to_default(self):
+        self.analyze("zoi", quality="9999")
+        self.assertEqual(
+            exchange.load_analysis(VIDEO_ID)["download_height"], "480"
+        )
 
     def test_11_analysis_error_is_reported(self):
         original = zoi_app.transcribe_from_youtube
@@ -334,6 +386,9 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(leftovers, [])
         self.assertIn(filename, self.page())
         self.assertIn(filename, self.client.get("/").get_data(as_text=True))
+        # Video sumber sudah ada, jadi tidak ada unduhan dan tidak ada langkah.
+        self.assertEqual(self.downloads, [])
+        self.assertTrue(all(item["step"] == "" for item in seen))
 
     @unittest.skipUnless(ffmpeg_available(), "FFmpeg tidak terpasang")
     def test_42_two_renders_do_not_collide(self):
@@ -376,20 +431,166 @@ class DashboardTest(unittest.TestCase):
         self.assertLess(data["progress"], 100)
         self.assertFalse(os.path.exists(os.path.join(self.folder, data["filename"])))
 
-    def test_44_missing_source_is_explained(self):
+    def test_44_without_source_and_url_render_is_refused(self):
         analysis = exchange.load_analysis(VIDEO_ID)
-        saved = analysis["source_file"]
-        analysis["source_file"] = "source_hilang.mp4"
+        saved_url = analysis["url"]
+        analysis["url"] = ""
         exchange.save_analysis(VIDEO_ID, analysis)
+        os.rename(self.source, self.source + ".simpan")
         try:
             response = self.client.post("/select", data={
                 "video_id": VIDEO_ID, "start_time": "3", "end_time": "13",
             })
             self.assertEqual(response.status_code, 400)
-            self.assertIn("tidak ditemukan", response.get_data(as_text=True))
+            self.assertIn("Analisis ulang", response.get_data(as_text=True))
+            self.assertIn("disabled", self.page().split("Render klip ini")[0][-200:])
         finally:
-            analysis["source_file"] = saved
+            os.rename(self.source + ".simpan", self.source)
+            analysis["url"] = saved_url
             exchange.save_analysis(VIDEO_ID, analysis)
+
+    @unittest.skipUnless(ffmpeg_available(), "FFmpeg tidak terpasang")
+    def test_45_video_is_downloaded_when_first_rendered(self):
+        os.remove(self.source)
+        del self.downloads[:]
+
+        html = self.page()
+        self.assertIn("Video belum diunduh", html)
+        self.assertNotIn("disabled", html.split("Render klip ini")[0][-200:])
+
+        jobs = []
+        for _ in range(2):
+            page = self.client.post("/select", data={
+                "video_id": VIDEO_ID, "title": "Unduh dulu",
+                "start_time": "3", "end_time": "13",
+            }).get_data(as_text=True)
+            jobs.append(page.split("/progress/")[1].split('"')[0])
+
+        data, seen = self.wait(f"/progress/{jobs[0]}")
+        self.assertEqual(data["status"], "done", data)
+        self.assertEqual(data["progress"], 100)
+
+        download = [item for item in seen if item["step"] == "Langkah 1 dari 2"]
+        render = [item for item in seen if item["step"] == "Langkah 2 dari 2"]
+        self.assertTrue(download, seen)
+        self.assertTrue(render, seen)
+        self.assertTrue(any("Mengunduh" in item["stage"] for item in download))
+        # Angka unduhan berasal dari yt-dlp dan tidak pernah menyentuh 100.
+        numbers = [
+            item["progress"] for item in download
+            if isinstance(item["progress"], int)
+        ]
+        self.assertTrue(numbers)
+        self.assertEqual(numbers, sorted(numbers))
+        self.assertTrue(all(value < 100 for value in numbers))
+
+        # Render kedua yang antre memakai file yang sama, tanpa unduh ulang.
+        second, _ = self.wait(f"/progress/{jobs[1]}")
+        self.assertEqual(second["status"], "done", second)
+        self.assertEqual(len(self.downloads), 1)
+        self.assertEqual(self.downloads[0]["fmt"], "480")
+        self.assertEqual(self.downloads[0]["out_dir"], self.folder)
+
+        self.assertTrue(os.path.isfile(self.source))
+        self.assertEqual(
+            exchange.load_analysis(VIDEO_ID)["source_file"],
+            f"source_{VIDEO_ID}.mp4",
+        )
+        self.assertIn("Video sumber tersimpan", self.page())
+        del self.downloads[:]
+
+    def test_46_download_failure_is_reported(self):
+        os.rename(self.source, self.source + ".simpan")
+        type(self).download_error = "Sign in to confirm you're not a bot"
+        try:
+            page = self.client.post("/select", data={
+                "video_id": VIDEO_ID, "title": "Gagal unduh",
+                "start_time": "3", "end_time": "13",
+            }).get_data(as_text=True)
+            job_id = page.split("/progress/")[1].split('"')[0]
+            data, _ = self.wait(f"/progress/{job_id}")
+        finally:
+            type(self).download_error = None
+            os.rename(self.source + ".simpan", self.source)
+            del self.downloads[:]
+
+        self.assertEqual(data["status"], "error")
+        self.assertIn("Video gagal diunduh", data["error"])
+        self.assertIn("not a bot", data["error"])
+        self.assertFalse(os.path.exists(os.path.join(self.folder, data["filename"])))
+
+    # ---- penyimpanan
+
+    def test_47_source_cannot_be_deleted_while_rendering(self):
+        zoi_app.RENDER_JOBS["sibuk"] = {
+            "status": "running", "error": "", "created_at": time.time(),
+            "video_id": VIDEO_ID, "progress": 10, "stage": "", "step": "",
+            "filename": "x.mp4",
+        }
+        try:
+            response = self.client.post(f"/video/{VIDEO_ID}/source/delete")
+        finally:
+            del zoi_app.RENDER_JOBS["sibuk"]
+
+        self.assertEqual(response.status_code, 409)
+        self.assertIn("sedang dipakai", response.get_data(as_text=True))
+        self.assertTrue(os.path.isfile(self.source))
+
+    def test_48_delete_source_frees_space_and_keeps_candidates(self):
+        partial = os.path.join(self.folder, f"source_{VIDEO_ID}.f135.mp4.part")
+        other = os.path.join(self.folder, f"source_{VIDEO_ID}LAIN.mp4")
+        for path in (partial, other):
+            with open(path, "wb") as file:
+                file.write(b"x")
+
+        before = self.client.get("/").get_data(as_text=True)
+        self.assertIn("Penyimpanan terpakai", before)
+
+        try:
+            response = self.client.post(f"/video/{VIDEO_ID}/source/delete")
+            self.assertEqual(response.status_code, 302)
+            self.assertFalse(os.path.exists(self.source))
+            self.assertFalse(os.path.exists(partial))
+            # Video lain yang ID-nya mirip tidak ikut terhapus.
+            self.assertTrue(os.path.exists(other))
+
+            analysis = exchange.load_analysis(VIDEO_ID)
+            self.assertEqual(analysis["source_file"], "")
+            self.assertTrue(analysis["groups"])
+
+            html = self.client.get(
+                f"/video/{VIDEO_ID}?deleted=sumber"
+            ).get_data(as_text=True)
+            self.assertIn("Video sumber dihapus", html)
+            self.assertIn("Video belum diunduh", html)
+            self.assertIn("Render klip ini", html)
+        finally:
+            os.remove(other)
+            if not os.path.exists(self.source):
+                shutil.copyfile(self.pristine, self.source)
+
+    def test_49_delete_rendered_clip(self):
+        name = f"zoi_{VIDEO_ID}_1-2_uji_abcdef.mp4"
+        path = os.path.join(self.folder, name)
+        with open(path, "wb") as file:
+            file.write(b"x")
+
+        self.assertIn(name, self.page())
+        response = self.client.post(
+            "/clip/delete", data={"filename": name, "video_id": VIDEO_ID}
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(os.path.exists(path))
+        self.assertNotIn(name, self.page())
+
+        # Hanya hasil render yang boleh dihapus lewat rute ini.
+        for bad in (
+            f"source_{VIDEO_ID}.mp4", "../app.py", name,
+            f"data/{VIDEO_ID}/analysis.json", "",
+        ):
+            response = self.client.post("/clip/delete", data={"filename": bad})
+            self.assertEqual(response.status_code, 404, bad)
+        self.assertTrue(os.path.isfile(self.source))
 
     # ---- keamanan file
 

@@ -8,10 +8,25 @@
     {% if video.language %}<span class="chip">Subtitle {{ video.language }}</span>{% endif %}
     <span class="chip">Mode {{ video.mode|upper }}</span>
   </div>
-  {% if not source_ready %}
-  <p class="warn">File video sumber tidak ada di folder output. Analisis ulang dari halaman utama sebelum merender.</p>
+  {% if source_ready %}
+  <div class="source">
+    <span class="small">Video sumber tersimpan di HP ({{ source_mb }} MB).</span>
+    <form method="POST" action="{{ url_for('delete_source', video_id=video.video_id) }}"
+          data-confirm="Hapus video sumber ({{ source_mb }} MB)? Kandidat tetap tersimpan. Video diunduh lagi bila Anda merender."
+              onsubmit="return confirm(this.dataset.confirm)">
+      <button class="btn danger inline" type="submit">Hapus video sumber</button>
+    </form>
+  </div>
+  {% elif can_render %}
+  <p class="muted" style="margin:10px 0 0">Video belum diunduh. Unduhan {{ download_height }}p dimulai otomatis saat Anda menekan Render klip ini.</p>
+  {% else %}
+  <p class="warn">Alamat video tidak tersimpan. Analisis ulang dari halaman utama sebelum merender.</p>
   {% endif %}
 </section>
+
+{% if page_error %}<div class="alert bad" role="alert">{{ page_error }}</div>{% endif %}
+{% if deleted == 'sumber' %}<div class="alert ok" role="status">Video sumber dihapus. Kandidat tetap tersimpan.</div>{% endif %}
+{% if deleted == 'klip' %}<div class="alert ok" role="status">Klip dihapus.</div>{% endif %}
 
 {% if imported %}
 <div class="alert ok" role="status">Kandidat dari {{ imported }} berhasil diimpor dan divalidasi. <a href="#impor">Lihat kandidatnya</a></div>
@@ -50,7 +65,7 @@
       <input type="hidden" name="analyst" value="{{ group.name }}">
       <input type="hidden" name="start_time" value="{{ clip.start_time }}">
       <input type="hidden" name="end_time" value="{{ clip.end_time }}">
-      <button class="btn" type="submit" {% if not source_ready %}disabled{% endif %}>Render klip ini</button>
+      <button class="btn" type="submit" {% if not can_render %}disabled{% endif %}>Render klip ini</button>
     </form>
   </article>
   {% endfor %}
@@ -132,7 +147,16 @@
         <a class="title" href="{{ url_for('serve_video', filename=item.filename) }}">{{ item.filename }}</a><br>
         <span class="muted">{{ item.modified }} &middot; {{ item.size_mb }} MB</span>
       </span>
-      <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>
+      <span class="actions">
+        <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>
+        <form method="POST" action="{{ url_for('delete_clip') }}"
+              data-confirm="Hapus klip {{ item.filename }}? File tidak bisa dikembalikan."
+              onsubmit="return confirm(this.dataset.confirm)">
+          <input type="hidden" name="filename" value="{{ item.filename }}">
+          <input type="hidden" name="video_id" value="{{ video.video_id }}">
+          <button class="btn danger inline" type="submit">Hapus</button>
+        </form>
+      </span>
     </li>
   {% endfor %}
   </ul>

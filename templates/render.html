@@ -9,9 +9,10 @@
     <span class="chip">{{ duration }} detik</span>
     {% if analyst %}<span class="chip">{{ analyst }}</span>{% endif %}
   </div>
+  <p class="muted" id="step" style="margin:0 0 6px" hidden></p>
   <div class="bar" id="bar"><div></div></div>
   <p class="percent" id="percent">0%</p>
-  <p id="stage">Menyiapkan rendering...</p>
+  <p id="stage">Menyiapkan...</p>
   <div id="result"></div>
   <a class="btn secondary" style="margin-top:12px"
      href="{{ url_for('video_page', video_id=video.video_id) }}">Kembali ke daftar kandidat</a>
@@ -20,7 +21,9 @@
 {% block scripts %}
 <script>
 (function () {
-  var fill = document.getElementById("bar").firstElementChild;
+  var bar = document.getElementById("bar");
+  var fill = bar.firstElementChild;
+  var step = document.getElementById("step");
   var percent = document.getElementById("percent");
   var stage = document.getElementById("stage");
   var result = document.getElementById("result");
@@ -46,7 +49,8 @@
     var box = document.createElement("div");
     box.className = "alert bad";
     box.setAttribute("role", "alert");
-    box.textContent = "Rendering gagal: " + (message || "penyebab tidak diketahui");
+    box.textContent = "Proses gagal: " + (message || "penyebab tidak diketahui");
+    bar.classList.remove("busy");
     result.replaceChildren(box);
   }
 
@@ -58,8 +62,19 @@
         return;
       }
       var data = await response.json();
-      fill.style.width = data.progress + "%";
-      percent.textContent = data.progress + "%";
+      step.hidden = !data.step;
+      step.textContent = data.step || "";
+      if (typeof data.progress === "number") {
+        bar.classList.remove("busy");
+        fill.style.width = data.progress + "%";
+        percent.hidden = false;
+        percent.textContent = data.progress + "%";
+      } else {
+        // Tahap yang tidak punya angka (misalnya menghubungi YouTube).
+        bar.classList.add("busy");
+        fill.style.width = "";
+        percent.hidden = true;
+      }
       stage.textContent = data.stage;
       if (data.status === "done") { showVideo(data.filename); return; }
       if (data.status === "error") { showError(data.error); return; }

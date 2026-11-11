@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Rendering - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card" aria-live="polite">
+  <h1>Rendering klip</h1>
+  <p style="overflow-wrap:anywhere"><strong>{{ title }}</strong></p>
+  <div class="meta">
+    <span class="chip">{{ start|hms }} &ndash; {{ end|hms }}</span>
+    <span class="chip">{{ duration }} detik</span>
+    {% if analyst %}<span class="chip">{{ analyst }}</span>{% endif %}
+  </div>
+  <div class="bar" id="bar"><div></div></div>
+  <p class="percent" id="percent">0%</p>
+  <p id="stage">Menyiapkan rendering...</p>
+  <div id="result"></div>
+  <a class="btn secondary" style="margin-top:12px"
+     href="{{ url_for('video_page', video_id=video.video_id) }}">Kembali ke daftar kandidat</a>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var fill = document.getElementById("bar").firstElementChild;
+  var percent = document.getElementById("percent");
+  var stage = document.getElementById("stage");
+  var result = document.getElementById("result");
+
+  function showVideo(filename) {
+    var base = "{{ url_for('home') }}output/" + encodeURIComponent(filename);
+    var ok = document.createElement("div");
+    ok.className = "alert ok";
+    ok.textContent = "Rendering berhasil. Video tersimpan di folder output.";
+    var video = document.createElement("video");
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = base;
+    var download = document.createElement("a");
+    download.className = "btn";
+    download.href = base + "?dl=1";
+    download.textContent = "Unduh video MP4";
+    result.replaceChildren(ok, video, download);
+  }
+
+  function showError(message) {
+    var box = document.createElement("div");
+    box.className = "alert bad";
+    box.setAttribute("role", "alert");
+    box.textContent = "Rendering gagal: " + (message || "penyebab tidak diketahui");
+    result.replaceChildren(box);
+  }
+
+  async function check() {
+    try {
+      var response = await fetch("{{ url_for('render_progress', job_id=job_id) }}", {cache: "no-store"});
+      if (response.status === 404) {
+        showError("Proses render tidak ditemukan. Aplikasi mungkin baru dijalankan ulang.");
+        return;
+      }
+      var data = await response.json();
+      fill.style.width = data.progress + "%";
+      percent.textContent = data.progress + "%";
+      stage.textContent = data.stage;
+      if (data.status === "done") { showVideo(data.filename); return; }
+      if (data.status === "error") { showError(data.error); return; }
+      setTimeout(check, 800);
+    } catch (error) {
+      stage.textContent = "Menghubungkan kembali...";
+      setTimeout(check, 1500);
+    }
+  }
+  check();
+})();
+</script>
+{% endblock %}

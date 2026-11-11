@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}{{ video.title }} - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card">
+  <h1 style="overflow-wrap:anywhere">{{ video.title }}</h1>
+  <div class="meta">
+    <span class="chip">Durasi {{ video.duration|hms }}</span>
+    {% if video.language %}<span class="chip">Subtitle {{ video.language }}</span>{% endif %}
+    <span class="chip">Mode {{ video.mode|upper }}</span>
+  </div>
+  {% if not source_ready %}
+  <p class="warn">File video sumber tidak ada di folder output. Analisis ulang dari halaman utama sebelum merender.</p>
+  {% endif %}
+</section>
+
+{% if imported %}
+<div class="alert ok" role="status">Kandidat dari {{ imported }} berhasil diimpor dan divalidasi. <a href="#impor">Lihat kandidatnya</a></div>
+{% endif %}
+{% for notice in video.notices %}
+<div class="alert info">{{ notice }}</div>
+{% endfor %}
+
+{% for group in groups %}
+<details class="card" {% if group.name == imported %}id="impor"{% endif %} {% if loop.first or group.kind != 'zoi' %}open{% endif %}>
+  <summary><span>{{ group.name }} <span class="muted">({{ group.clips|length }})</span></span></summary>
+
+  {% for warning in group.file_warnings %}
+  <p class="warn">{{ warning }}</p>
+  {% endfor %}
+
+  {% if not group.clips %}
+  <p class="muted" style="margin-top:10px">Tidak ada kandidat dari analis ini.</p>
+  {% endif %}
+
+  {% for clip in group.clips %}
+  <article class="clip">
+    <h3 style="overflow-wrap:anywhere">{{ loop.index }}. {{ clip.title }}</h3>
+    <div class="meta">
+      <span class="chip">{{ clip.start_time|hms }} &ndash; {{ clip.end_time|hms }}</span>
+      <span class="chip">{{ clip.duration|round|int }} detik</span>
+      <span class="chip score">Skor {{ clip.score }}/100</span>
+      {% if clip.agrees_with_zoi %}<span class="chip agree">Juga dipilih ZOI</span>{% endif %}
+    </div>
+    {% if clip.hook_sentence %}<p class="hook"><span class="muted">Hook</span><br>{{ clip.hook_sentence }}</p>{% endif %}
+    {% if clip.virality_reason %}<p class="small"><span class="muted">Alasan:</span> {{ clip.virality_reason }}</p>{% endif %}
+    {% for warning in clip.warnings %}<p class="warn">{{ warning }}</p>{% endfor %}
+    <form method="POST" action="{{ url_for('select') }}" style="margin-top:10px">
+      <input type="hidden" name="video_id" value="{{ video.video_id }}">
+      <input type="hidden" name="title" value="{{ clip.title }}">
+      <input type="hidden" name="analyst" value="{{ group.name }}">
+      <input type="hidden" name="start_time" value="{{ clip.start_time }}">
+      <input type="hidden" name="end_time" value="{{ clip.end_time }}">
+      <button class="btn" type="submit" {% if not source_ready %}disabled{% endif %}>Render klip ini</button>
+    </form>
+  </article>
+  {% endfor %}
+
+  {% if group.rejected %}
+  <details>
+    <summary><span class="small">{{ group.rejected|length }} kandidat ditolak validasi</span></summary>
+    <ul class="small muted" style="padding-left:18px;margin:0">
+      {% for item in group.rejected %}<li>#{{ item.index }} {{ item.title }}: {{ item.reason }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  {% if group.kind == 'import' %}
+  <form method="POST" action="{{ url_for('delete_group', video_id=video.video_id) }}" style="margin-top:12px">
+    <input type="hidden" name="name" value="{{ group.name }}">
+    <button class="btn secondary inline" type="submit">Hapus hasil impor ini</button>
+  </form>
+  {% endif %}
+</details>
+{% endfor %}
+
+<p class="muted" style="margin-top:12px">Skor tiap analis memakai skala sendiri, jadi jangan dibandingkan antar-kelompok.</p>
+
+<details class="card" id="ai" {% if import_error or video.mode != 'zoi' %}open{% endif %}>
+  <summary><span>Analisis AI eksternal (tanpa API key)</span></summary>
+  <p class="muted" style="margin-top:8px">ZOI tidak mengirim transkrip ke layanan AI mana pun. Anda sendiri yang membawa data ke Claude dan membawa jawabannya kembali.</p>
+
+  <ol class="steps">
+    <li><strong>Salin prompt.</strong> Isinya instruksi dan seluruh transkrip video ini.
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn inline" type="button" id="copy-prompt">Salin prompt</button>
+        <a class="btn secondary inline" href="{{ url_for('export_prompt', video_id=video.video_id, dl=1) }}">Unduh prompt (.txt)</a>
+        <a class="btn secondary inline" href="{{ url_for('export_json', video_id=video.video_id) }}">Unduh data (.json)</a>
+      </div>
+      <p class="small" id="copy-status" role="status" style="margin:6px 0 0"></p>
+    </li>
+    <li><strong>Tempel ke Claude</strong> (aplikasi Claude, Claude Code, atau AI lain) dan tunggu jawaban berupa JSON.</li>
+    <li><strong>Tempel jawabannya di bawah</strong>, lalu tekan Impor. ZOI memeriksa setiap timestamp sebelum menampilkannya.</li>
+  </ol>
+
+  {% if import_error %}
+  <div class="alert bad" role="alert">{{ import_error }}
+    {% if import_rejected %}
+    <ul>{% for item in import_rejected %}<li>#{{ item.index }} {{ item.title }}: {{ item.reason }}</li>{% endfor %}</ul>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form method="POST" action="{{ url_for('import_analysis', video_id=video.video_id) }}"
+        enctype="multipart/form-data" style="margin-top:12px">
+    <label class="field" for="analyst">Sumber analisis</label>
+    <select id="analyst" name="analyst">
+      <option value="claude" {% if video.mode != 'chatgpt' %}selected{% endif %}>Claude</option>
+      <option value="chatgpt" {% if video.mode == 'chatgpt' %}selected{% endif %}>ChatGPT</option>
+      <option value="other">AI lain</option>
+    </select>
+
+    <label class="field" for="json_text" style="margin-top:12px">Jawaban JSON</label>
+    <textarea id="json_text" name="json_text" spellcheck="false"
+              placeholder='{"schema": "zoi.import.v1", "highlights": [ ... ]}'>{{ import_text or '' }}</textarea>
+
+    <label class="field" for="json_file" style="margin-top:12px">Atau unggah file .json</label>
+    <input type="file" id="json_file" name="json_file" accept=".json,.txt,application/json,text/plain">
+
+    <p class="muted">Kandidat harus {{ limits.MIN_DURATION|int }}&ndash;{{ limits.MAX_DURATION|int }} detik,
+      berada di dalam durasi video, dan tidak saling tumpang tindih. Maksimal {{ limits.MAX_CANDIDATES }} kandidat.</p>
+    <button class="btn" type="submit">Impor dan validasi</button>
+  </form>
+</details>
+
+{% if renders %}
+<section class="card">
+  <h2>Klip yang sudah dirender dari video ini</h2>
+  <ul class="list">
+  {% for item in renders %}
+    <li>
+      <span class="name">
+        <a class="title" href="{{ url_for('serve_video', filename=item.filename) }}">{{ item.filename }}</a><br>
+        <span class="muted">{{ item.modified }} &middot; {{ item.size_mb }} MB</span>
+      </span>
+      <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<a class="btn secondary" style="margin-top:14px" href="{{ url_for('home') }}">Analisis video lain</a>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var button = document.getElementById("copy-prompt");
+  var status = document.getElementById("copy-status");
+  if (!button) { return; }
+
+  function fallbackCopy(text) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
+    document.body.removeChild(area);
+    return ok;
+  }
+
+  button.addEventListener("click", async function () {
+    button.disabled = true;
+    status.textContent = "Menyiapkan prompt...";
+    try {
+      var response = await fetch("{{ url_for('export_prompt', video_id=video.video_id) }}", {cache: "no-store"});
+      if (!response.ok) { throw new Error("gagal"); }
+      var text = await response.text();
+      var ok = false;
+      if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(text); ok = true; } catch (error) { ok = false; }
+      }
+      if (!ok) { ok = fallbackCopy(text); }
+      status.textContent = ok
+        ? "Prompt tersalin (" + text.length.toLocaleString("id-ID") + " karakter). Tempel ke Claude."
+        : "Browser menolak menyalin. Gunakan tombol Unduh prompt.";
+    } catch (error) {
+      status.textContent = "Prompt gagal diambil. Gunakan tombol Unduh prompt.";
+    }
+    button.disabled = false;
+  });
+})();
+</script>
+{% endblock %}

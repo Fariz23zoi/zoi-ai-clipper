@@ -17,6 +17,78 @@ from ..config import LOCAL_OUTPUT_DIR
 RENDER_PRESET = os.getenv("ZOI_RENDER_PRESET", "veryfast").strip() or "veryfast"
 RENDER_CRF = os.getenv("ZOI_RENDER_CRF", "23").strip() or "23"
 
+# FFmpeg dijalankan dengan prioritas lebih rendah supaya HP tetap bisa
+# dipakai selama rendering. 0 mematikan fitur ini.
+try:
+    RENDER_NICE = max(0, min(19, int(os.getenv("ZOI_RENDER_NICE", "10"))))
+except ValueError:
+    RENDER_NICE = 10
+
+
+# Shorts cukup 30 fps. Sumber 50/60 fps diturunkan separuhnya, karena
+# merender 60 fps membutuhkan kerja hampir dua kali lipat. 0 = tanpa batas.
+try:
+    RENDER_MAX_FPS = max(0.0, float(os.getenv("ZOI_RENDER_MAX_FPS", "30")))
+except ValueError:
+    RENDER_MAX_FPS = 30.0
+
+
+def _fps_limit_filter(source_path: str) -> str:
+    """Kembalikan 'fps=N/D,' bila sumber lebih cepat dari batas, atau ''.
+
+    Frame rate dibagi dua (60 -> 30, 50 -> 25) supaya gerakan tetap mulus.
+    Bila frame rate tidak bisa dibaca, video dibiarkan apa adanya.
+    """
+    if not RENDER_MAX_FPS:
+        return ""
+
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+             "-of", "default=noprint_wrappers=1", source_path],
+            capture_output=True, text=True, check=True, timeout=60
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+    rates = dict(
+        line.split("=", 1) for line in probe.stdout.splitlines() if "=" in line
+    )
+
+    for key in ("avg_frame_rate", "r_frame_rate"):
+        try:
+            number, _, divisor = rates.get(key, "").partition("/")
+            number, divisor = int(number), int(divisor or "1")
+        except ValueError:
+            continue
+
+        if number <= 0 or divisor <= 0:
+            continue
+
+        # Nilai yang tidak wajar berarti frame rate tidak diketahui pasti.
+        if number / divisor > 240:
+            return ""
+
+        halvings = 0
+        while number / (divisor * 2 ** halvings) > RENDER_MAX_FPS + 1:
+            halvings += 1
+
+        if not halvings:
+            return ""
+        return f"fps={number}/{divisor * 2 ** halvings},"
+
+    return ""
+
+
+def _with_low_priority(command):
+    """Awali perintah dengan `nice` bila tersedia di sistem."""
+    import shutil
+
+    if RENDER_NICE and shutil.which("nice"):
+        return ["nice", "-n", str(RENDER_NICE)] + list(command)
+    return list(command)
+
 
 
 def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="Memproses"):
@@ -30,7 +102,7 @@ def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="
     # menghentikan FFmpeg selagi stdout sedang dibaca.
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errors:
         proc = subprocess.Popen(
-            command, stdout=subprocess.PIPE,
+            _with_low_priority(command), stdout=subprocess.PIPE,
             stderr=errors, stdin=subprocess.DEVNULL, text=True, bufsize=1
         )
         try:
@@ -217,7 +289,7 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
     """
     duration = max(0.1, end - start)
     filter_complex = (
-        "[0:v]split=2[bg][fg];"
+        f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
         "[bg]scale=180:320:force_original_aspect_ratio=increase,"
         "crop=180:320,boxblur=6:3,scale=720:1280[bg];"
         "[fg]scale=720:1280:force_original_aspect_ratio=decrease[fg];"

@@ -7,7 +7,11 @@
   <div class="bar busy" id="bar"><div></div></div>
   <p class="percent" id="percent" hidden>0%</p>
   <p id="stage" style="margin-top:10px">Menyiapkan...</p>
+  {% if downloads %}
   <p class="muted">Jangan tutup halaman ini. Video yang panjang perlu waktu lebih lama untuk diunduh.</p>
+  {% else %}
+  <p class="muted">Jangan tutup halaman ini. Tahap ini hanya mengambil subtitle; video baru diunduh saat Anda merender klip.</p>
+  {% endif %}
   <div id="result"></div>
 </section>
 {% endblock %}
