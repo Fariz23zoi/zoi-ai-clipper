@@ -584,6 +584,15 @@ def _analyze_worker(job_id, video_url, mode):
         notices = []
         groups = _run_zoi_engines(transcript)
 
+        language = str(transcript.get("language") or "")
+        if language and not language.lower().startswith("id"):
+            notices.append(
+                f"Subtitle video ini berbahasa \"{language}\", bukan "
+                "Indonesia. ZOI Engine memakai kata kunci bahasa Indonesia, "
+                "jadi kandidatnya bisa sedikit atau kurang tepat. Analisis "
+                "Claude atau ChatGPT tetap bisa dipakai."
+            )
+
         if mode != "zoi":
             stage("Menjalankan analisis AI")
             groups.extend(_run_api_providers(transcript, mode, notices))

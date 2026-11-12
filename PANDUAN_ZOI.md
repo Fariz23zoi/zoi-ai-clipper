@@ -74,6 +74,8 @@ Dashboard terdiri dari tiga halaman.
 
 **Halaman 1: tempel link.** Tempel link YouTube, pilih mode, tekan **Analisis video**. Video harus punya subtitle/CC bahasa Indonesia atau Inggris. Analisis hanya mengambil subtitle, jadi cepat dan hemat kuota; video belum diunduh.
 
+Subtitle yang dicoba, berurutan: bahasa Indonesia, bahasa Inggris, lalu subtitle bahasa asli video. Bila YouTube sama sekali tidak menyediakan subtitle (termasuk subtitle otomatis), video itu belum bisa dianalisis. Bila subtitle ada tetapi gagal diunduh, pesan gagalnya menyertakan keterangan dari YouTube.
+
 **Halaman 2: analisis AI.** Hanya muncul pada mode Claude, ChatGPT, dan Hybrid. Salin prompt, tempel ke Claude atau ChatGPT, lalu tempel jawabannya dan tekan **Impor dan lihat hasil**. Mode ZOI melewati halaman ini.
 
 **Halaman 3: pilih klip.** Pilih **Kualitas render**, lalu tekan **Render klip ini** pada kandidat pilihan. Hasil analisis AI tampil paling atas, hasil ZOI Engine V4.1 dan V4.2 di bawahnya. Pada render pertama, video diunduh dulu (Langkah 1 dari 2, persentase dari yt-dlp), lalu dirender (Langkah 2 dari 2, persentase dari FFmpeg). Hasilnya bisa diputar dan diunduh; file tersimpan di `output/` dengan awalan `zoi_`.

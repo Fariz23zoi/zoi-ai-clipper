@@ -271,6 +271,30 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(data["status"], "error")
         self.assertIn("tidak memiliki subtitle", data["error"])
 
+    def test_11b_non_indonesian_subtitles_are_flagged(self):
+        self.assertNotIn("bukan Indonesia", self.page())
+
+        english = dict(self.transcript, language="en")
+        original = zoi_app.transcribe_from_youtube
+        original_load = exchange.load_transcript
+        zoi_app.transcribe_from_youtube = lambda url: english
+        exchange.load_transcript = lambda video_id: None
+        try:
+            data = self.analyze("zoi")
+        finally:
+            zoi_app.transcribe_from_youtube = original
+            exchange.load_transcript = original_load
+
+        self.assertEqual(data["status"], "done", data)
+        html = self.page()
+        self.assertIn("bukan Indonesia", html)
+        self.assertIn("Claude atau ChatGPT tetap bisa dipakai", html)
+
+        # Kembalikan ke transkrip Indonesia untuk tes berikutnya.
+        exchange.save_transcript(self.transcript)
+        self.analyze("zoi")
+        self.assertNotIn("bukan Indonesia", self.page())
+
     def test_12_candidates_page_offers_five_render_qualities(self):
         html = self.page()
         for quality, size in (

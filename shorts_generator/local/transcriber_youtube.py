@@ -252,6 +252,116 @@ def transcript_from_vtt(content):
     }
 
 
+MAX_SUBTITLE_ATTEMPTS = 6
+_ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _listed_languages(info):
+    """Bahasa subtitle yang dilaporkan YouTube: (buatan pembuat, otomatis).
+
+    Mengembalikan (None, None) bila daftar itu tidak tersedia sama sekali.
+    """
+    manual = info.get("subtitles")
+    automatic = info.get("automatic_captions")
+
+    if manual is None and automatic is None:
+        return None, None
+
+    return (
+        [key for key in (manual or {}) if key != "live_chat"],
+        list(automatic or {})
+    )
+
+
+def _subtitle_candidates(info, preferred):
+    """Urutan bahasa subtitle yang dicoba.
+
+    1. Bahasa yang diinginkan (Indonesia, lalu Inggris), termasuk varian
+       wilayah seperti en-US.
+    2. Subtitle otomatis dalam bahasa asli video (kunci berakhiran -orig),
+       apa pun bahasanya. Teks ucapan asli tetap bisa dianalisis, terutama
+       oleh Claude atau ChatGPT.
+    3. Subtitle buatan pembuat video dalam bahasa lain.
+
+    Hanya bahasa yang benar-benar dilaporkan YouTube yang dicoba, supaya
+    video tanpa subtitle gagal dengan cepat dan dengan pesan yang benar.
+    """
+    manual, automatic = _listed_languages(info)
+
+    if manual is None:
+        # Daftar tidak tersedia: coba bahasa yang diinginkan apa adanya.
+        return list(preferred)
+
+    candidates = []
+
+    def add(key):
+        if key not in candidates:
+            candidates.append(key)
+
+    for lang in preferred:
+        if lang in manual or lang in automatic:
+            add(lang)
+        for key in manual:
+            if key.startswith(lang + "-"):
+                add(key)
+
+    for key in automatic:
+        if key.endswith("-orig"):
+            add(key)
+
+    for key in manual:
+        add(key)
+
+    return candidates[:MAX_SUBTITLE_ATTEMPTS]
+
+
+def _short_error(error):
+    text = _ANSI_CODES.sub("", str(error))
+    text = re.sub(r"\s+", " ", text).replace("ERROR: ", "").strip()
+    return text[:300]
+
+
+def _no_subtitle_message(info, errors):
+    """Pesan gagal yang menyebut penyebab sebenarnya."""
+    manual, automatic = _listed_languages(info)
+    listed = (manual or []) + [
+        key for key in (automatic or []) if key.endswith("-orig")
+    ]
+
+    if manual is not None and not manual and not automatic:
+        return (
+            "YouTube tidak menyediakan subtitle untuk video ini, termasuk "
+            "subtitle otomatis. ZOI membaca isi video dari subtitle, jadi "
+            "video ini belum bisa dianalisis. Biasanya ini terjadi pada "
+            "video yang baru diunggah, video musik, atau video yang "
+            "subtitlenya dimatikan pembuatnya."
+        )
+
+    if not errors:
+        return (
+            "Video ini tidak memiliki subtitle yang bisa dipakai. "
+            "Coba video lain yang memiliki subtitle/CC."
+        )
+
+    tried = ", ".join(lang for lang, _ in errors)
+    detail = errors[-1][1]
+    message = (
+        "Subtitle video ini ada di YouTube tetapi gagal diambil "
+        f"(bahasa yang dicoba: {tried}). "
+    )
+
+    if "429" in detail or "Too Many Requests" in detail:
+        message += (
+            "YouTube sedang membatasi permintaan dari jaringan ini. "
+            "Tunggu beberapa menit, lalu coba lagi. "
+        )
+
+    if listed:
+        message += f"Bahasa yang tersedia: {', '.join(listed[:8])}. "
+
+    return message + f"Pesan dari YouTube: {detail}"
+
+
 def transcribe_from_youtube(
     video_url: str,
     language: str = "id"
@@ -274,7 +384,7 @@ def transcribe_from_youtube(
             )
     except DownloadError as error:
         raise RuntimeError(
-            f"Gagal membaca video YouTube: {str(error)[:300]}"
+            f"Gagal membaca video YouTube: {_short_error(error)}"
         ) from error
 
     video_id = info.get("id", "")
@@ -282,12 +392,13 @@ def transcribe_from_youtube(
     if not video_id:
         raise RuntimeError("ID video YouTube tidak ditemukan.")
 
-    languages = list(dict.fromkeys([language, "en"]))
+    preferred = list(dict.fromkeys([language, "en"]))
 
-    subtitle_file = None
+    parsed = None
     selected_language = None
+    errors = []
 
-    for lang in languages:
+    for lang in _subtitle_candidates(info, preferred):
         options = {
             "skip_download": True,
             "writesubtitles": True,
@@ -318,38 +429,36 @@ def transcribe_from_youtube(
             try:
                 with YoutubeDL(options) as ydl:
                     ydl.extract_info(video_url, download=True)
-            except DownloadError:
+            except DownloadError as error:
+                errors.append((lang, _short_error(error)))
                 continue
 
             files = subtitle_files()
 
-        if files:
-            subtitle_file = max(
-                files,
-                key=lambda file: file.stat().st_mtime
-            )
-            selected_language = lang
-            break
+        if not files:
+            errors.append((lang, "YouTube tidak mengirim file subtitle."))
+            continue
 
-    if subtitle_file is None:
-        raise RuntimeError(
-            "Video ini tidak memiliki subtitle bahasa Indonesia maupun "
-            "Inggris di YouTube, jadi transkrip tidak bisa diambil. "
-            "Coba video lain yang memiliki subtitle/CC."
+        subtitle_file = max(
+            files,
+            key=lambda file: file.stat().st_mtime
+        )
+        candidate = transcript_from_vtt(
+            subtitle_file.read_text(encoding="utf-8", errors="replace")
         )
 
-    content = subtitle_file.read_text(
-        encoding="utf-8",
-        errors="replace"
-    )
+        if not candidate["segments"]:
+            errors.append((lang, "File subtitle tidak berisi teks."))
+            continue
 
-    parsed = transcript_from_vtt(content)
+        parsed = candidate
+        selected_language = lang
+        break
+
+    if parsed is None:
+        raise RuntimeError(_no_subtitle_message(info, errors))
+
     segments = parsed["segments"]
-
-    if not segments:
-        raise RuntimeError(
-            "Subtitle berhasil diunduh, tetapi teks tidak ditemukan."
-        )
 
     return {
         "title": info.get("title", ""),
@@ -363,7 +472,10 @@ def transcribe_from_youtube(
             info.get("duration")
             or max(s["end"] for s in segments)
         ),
-        "language": selected_language,
+        # "id-orig" adalah subtitle otomatis bahasa asli; bahasanya "id".
+        "language": selected_language[:-5]
+        if selected_language.endswith("-orig") else selected_language,
+        "subtitle_track": selected_language,
         "parser_version": PARSER_VERSION,
         "segments": segments,
         "words": parsed["words"]
