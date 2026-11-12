@@ -1,5 +1,6 @@
 # Pengenal suara untuk video tanpa subtitle (opsional, hanya untuk laptop).
 # Dipasang otomatis oleh mulai_windows.bat dan mulai.sh.
 # Manual: pip install -r requirements-speech.txt
+# Butuh Python 3.10 sampai 3.13; onnxruntime belum tersedia untuk 3.15.
 # Model (sekitar 460 MB untuk "small") diunduh sekali saat pertama dipakai.
 faster-whisper>=1.1

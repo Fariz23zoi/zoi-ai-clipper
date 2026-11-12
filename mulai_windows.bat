@@ -12,6 +12,9 @@ where node >nul 2>nul
 if errorlevel 1 (echo [!] Node.js belum terpasang. Ikuti PANDUAN_ZOI.md bagian Memasang di laptop Windows. & pause & exit /b 1)
 
 if not exist ".venv\Scripts\python.exe" echo Menyiapkan Python untuk ZOI. Hanya sekali, mohon tunggu...
+rem Python 3.13/3.12 diutamakan: pengenal suara belum tersedia untuk Python yang lebih baru.
+if not exist ".venv\Scripts\python.exe" py -3.13 -m venv .venv >nul 2>nul
+if not exist ".venv\Scripts\python.exe" py -3.12 -m venv .venv >nul 2>nul
 if not exist ".venv\Scripts\python.exe" py -3 -m venv .venv >nul 2>nul
 if not exist ".venv\Scripts\python.exe" python -m venv .venv >nul 2>nul
 if not exist ".venv\Scripts\python.exe" for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python3*" "%ProgramFiles%\Python3*") do if not exist ".venv\Scripts\python.exe" if exist "%%~D\python.exe" "%%~D\python.exe" -m venv .venv

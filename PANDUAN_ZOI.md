@@ -85,6 +85,7 @@ Subtitle yang dicoba, berurutan: bahasa Indonesia, bahasa Inggris, lalu subtitle
 Bila YouTube tidak menyediakan subtitle, atau subtitlenya gagal diunduh, ZOI di laptop mengenali ucapan dari suara video dengan **Whisper** (pengenal suara yang berjalan di laptop sendiri, tanpa API key dan tanpa biaya).
 
 - **Hanya di laptop.** Di HP (Termux) fitur ini tidak tersedia; video tanpa subtitle tetap gagal dengan pesan yang menjelaskannya.
+- **Butuh Python 3.13** (atau 3.10 sampai 3.12). Untuk Python 3.14 ke atas, salah satu komponennya belum tersedia. Peluncur Windows otomatis memakai Python 3.13 bila terpasang.
 - **Dipasang otomatis** oleh `mulai_windows.bat` atau `mulai.sh` (sekitar 200 MB). Manual: `pip install -r requirements-speech.txt`.
 - **Model diunduh sekali** saat pertama dipakai, sekitar 460 MB, ke folder `models/` di dalam folder ZOI.
 - **Yang diunduh hanya audionya**, lalu dihapus setelah transkrip jadi. Bila video sumber sudah ada di laptop, video itu yang dipakai.
