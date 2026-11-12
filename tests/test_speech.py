@@ -197,6 +197,30 @@ class TranscribeFileTest(unittest.TestCase):
         self.assertFalse(speech._LOCK.locked())
 
 
+@unittest.skipUnless(speech.is_available(), "faster-whisper tidak terpasang")
+class RunnerTest(unittest.TestCase):
+    def setUp(self):
+        self.saved = speech.BATCH_SIZE
+
+    def tearDown(self):
+        speech.BATCH_SIZE = self.saved
+
+    def test_real_model_is_batched(self):
+        from faster_whisper import BatchedInferencePipeline
+
+        WhisperModel = type("WhisperModel", (), {})
+        runner, options = speech._runner(WhisperModel())
+        self.assertIsInstance(runner, BatchedInferencePipeline)
+        self.assertEqual(options, {"batch_size": speech.BATCH_SIZE})
+
+    def test_batch_size_one_means_one_at_a_time(self):
+        speech.BATCH_SIZE = 1
+        model = type("WhisperModel", (), {})()
+        runner, options = speech._runner(model)
+        self.assertIs(runner, model)
+        self.assertTrue(options["vad_filter"])
+
+
 class HelpersTest(unittest.TestCase):
     def test_is_available_is_a_boolean(self):
         self.assertIsInstance(speech.is_available(), bool)
