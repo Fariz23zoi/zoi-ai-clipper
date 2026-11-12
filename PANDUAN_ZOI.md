@@ -107,6 +107,16 @@ Bila YouTube tidak menyediakan subtitle, atau subtitlenya gagal diunduh, ZOI di 
 - Video sumber disimpan satu per video. Bila Anda memilih kualitas yang lebih tinggi daripada sumber yang tersimpan, video diunduh ulang dengan kualitas yang cukup. Memilih kualitas lebih rendah memakai sumber yang sudah ada.
 - Pilihan terakhir diingat browser. Bawaan pertama kali adalah 720p (bisa diubah lewat `ZOI_RENDER_QUALITY`).
 
+## Transkrip lewat Google Colab (pilihan tambahan)
+
+Untuk laptop yang lambat, transkrip video tanpa subtitle bisa dibuat di Google Colab, yang meminjamkan komputer ber-GPU secara gratis. Cukup akun Google, tanpa API key. Buka dari tombol **Transkrip lewat Google Colab** di halaman utama.
+
+1. **Unduh audionya** dari ZOI (sekitar 0,5 MB per menit video).
+2. **Unduh notebook ZOI**, buka di colab.research.google.com lewat **File → Upload notebook**, pilih **Runtime → Change runtime type → T4 GPU**, lalu **Runtime → Run all**. Pilih file audio saat diminta. File `.srt` terunduh otomatis setelah selesai.
+3. **Impor file `.srt`** ke ZOI bersama link YouTube yang sama, lalu analisis seperti biasa.
+
+File `.srt` atau `.vtt` dari aplikasi transkrip lain juga bisa diimpor. GPU gratis Colab dibatasi waktu pemakaian dan kadang tidak tersedia. Notebook dibuat dari `colab/build_notebook.py`.
+
 ## Supaya ringan di HP
 
 - **Pilih kualitas render yang lebih rendah** bila HP terasa berat. 480p jauh lebih cepat daripada 720p atau 1080p.

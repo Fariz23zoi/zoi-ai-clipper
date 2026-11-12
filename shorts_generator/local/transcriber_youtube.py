@@ -398,6 +398,26 @@ def _no_subtitle_message(info, errors):
     return message + f"Pesan dari YouTube: {detail}"
 
 
+def fetch_video_metadata(video_url: str) -> Dict:
+    """Data video dari YouTube (judul, durasi, ukuran) tanpa mengunduh apa pun."""
+    options = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "js_runtimes": {"node": {}},
+    }
+
+    try:
+        with YoutubeDL(options) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+    except DownloadError as error:
+        raise RuntimeError(
+            f"Gagal membaca video YouTube: {_short_error(error)}"
+        ) from error
+
+    return _video_metadata(info, video_url)
+
+
 def transcribe_from_youtube(
     video_url: str,
     language: str = "id"

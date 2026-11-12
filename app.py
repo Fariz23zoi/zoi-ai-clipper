@@ -23,7 +23,7 @@ import webbrowser
 
 from flask import (
     Flask, Response, abort, jsonify, redirect, render_template, request,
-    send_from_directory, url_for,
+    send_file, send_from_directory, url_for,
 )
 
 from shorts_generator import exchange, zoi_engine_v4_2
@@ -37,7 +37,8 @@ from shorts_generator.local.downloader import (
     _extract_youtube_video_id, download_audio_local, download_youtube_local,
 )
 from shorts_generator.local.transcriber_youtube import (
-    PARSER_VERSION, SubtitlesUnavailable, transcribe_from_youtube,
+    PARSER_VERSION, SubtitlesUnavailable, fetch_video_metadata,
+    transcribe_from_youtube, transcript_from_vtt,
 )
 from shorts_generator.zoi_engine import analyze_transcript
 
@@ -117,6 +118,7 @@ MODE_ANALYSTS = {
 
 RENDER_JOBS = {}
 ANALYZE_JOBS = {}
+AUDIO_JOBS = {}
 _JOBS_LOCK = threading.Lock()
 _ANALYSIS_LOCK = threading.Lock()
 # Satu render pada satu waktu: FFmpeg sudah memakai semua inti CPU HP.
@@ -694,6 +696,14 @@ def _analyze_worker(job_id, video_url, mode):
         notices = []
         groups = _run_zoi_engines(transcript)
 
+        if transcript.get("source") == "import":
+            notices.append(
+                "Transkrip video ini diimpor dari file "
+                f"({transcript.get('import_file') or 'SRT/VTT'}), misalnya "
+                "hasil Google Colab. Bisa ada kata yang salah dengar; tonton "
+                "klipnya sebelum diunggah."
+            )
+
         from_speech = transcript.get("source") == "whisper"
         if from_speech:
             why = (
@@ -814,6 +824,204 @@ def analyze():
     return render_template(
         "analyzing.html", job_id=job_id, video_url=video_url,
         downloads=DOWNLOAD_AT_ANALYSIS
+    )
+
+
+# ----------------------------------- transkrip dari luar (Colab, aplikasi lain)
+
+COLAB_NOTEBOOK = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "colab", "zoi_transkrip_colab.ipynb"
+)
+AUDIO_EXTENSIONS = (".m4a", ".webm", ".opus", ".mp3", ".ogg", ".mp4", ".mka")
+
+
+def _youtube_id_or_error(video_url):
+    if not re.match(r"^https?://\S+$", video_url or ""):
+        return None, "Masukkan link YouTube yang diawali http:// atau https://."
+
+    video_id = _extract_youtube_video_id(video_url)
+    if not video_id or not exchange.is_valid_video_id(video_id):
+        return None, "Link ini tidak dikenali sebagai video YouTube."
+
+    return video_id, ""
+
+
+def _transkrip_page(error="", status=200, **extra):
+    return render_template(
+        "transkrip.html", error=error, keys=_provider_keys(), **extra
+    ), status
+
+
+@app.route("/transkrip")
+def transkrip_page():
+    return _transkrip_page()
+
+
+@app.route("/transkrip/notebook")
+def transkrip_notebook():
+    if not os.path.isfile(COLAB_NOTEBOOK):
+        abort(404)
+    return send_file(
+        COLAB_NOTEBOOK, as_attachment=True,
+        download_name="zoi_transkrip_colab.ipynb",
+        mimetype="application/x-ipynb+json"
+    )
+
+
+def _audio_worker(job_id, video_url):
+    def report(stage, progress=None):
+        _update_job(AUDIO_JOBS, job_id, stage=stage, progress=progress)
+
+    try:
+        report("Menghubungi YouTube", None)
+        path = download_audio_local(
+            video_url, out_dir=OUTPUT_DIR, progress_hook=_progress_hook(report)
+        )
+        _update_job(
+            AUDIO_JOBS, job_id, status="done", stage="Audio siap diunduh",
+            progress=100, filename=os.path.basename(path),
+            size_mb=_size_mb(path)
+        )
+    except Exception as error:
+        _update_job(
+            AUDIO_JOBS, job_id, status="error", stage="Gagal",
+            error=f"Audio gagal diunduh: {str(error)[:500]}"
+        )
+
+
+@app.route("/transkrip/audio", methods=["POST"])
+def transkrip_audio():
+    video_url = request.form.get("youtube_url", "").strip()
+    _video_id, error = _youtube_id_or_error(video_url)
+    if error:
+        return _transkrip_page(error, 400, youtube_url=video_url)
+
+    job_id = _new_job(
+        AUDIO_JOBS, stage="Menyiapkan", progress=None, filename=""
+    )
+    threading.Thread(
+        target=_audio_worker, args=(job_id, video_url), daemon=True
+    ).start()
+
+    return render_template(
+        "transkrip_audio.html", job_id=job_id, video_url=video_url
+    )
+
+
+@app.route("/transkrip/audio/status/<job_id>")
+def transkrip_audio_status(job_id):
+    job = _public_job(AUDIO_JOBS, job_id)
+    if not job:
+        return jsonify({"status": "not_found"}), 404
+    return jsonify(job)
+
+
+@app.route("/transkrip/audio/file/<filename>")
+def transkrip_audio_file(filename):
+    # Hanya file audio_<id>.<ext> buatan ZOI yang boleh diunduh.
+    name = os.path.basename(filename)
+    if (
+        name != filename or not name.startswith("audio_")
+        or not name.lower().endswith(AUDIO_EXTENSIONS)
+        or not os.path.isfile(os.path.join(OUTPUT_DIR, name))
+    ):
+        abort(404)
+    return send_from_directory(OUTPUT_DIR, name, as_attachment=True)
+
+
+def _import_worker(job_id, video_url, video_id, mode, parsed, filename):
+    """Lengkapi transkrip impor dengan data video, lalu analisis seperti biasa."""
+    try:
+        _update_job(
+            ANALYZE_JOBS, job_id, stage="Membaca data video dari YouTube",
+            progress=None
+        )
+        last_end = max(segment["end"] for segment in parsed["segments"])
+
+        try:
+            video = fetch_video_metadata(video_url)
+        except Exception:
+            # Tanpa data YouTube transkrip tetap bisa dipakai.
+            video = {"video_id": video_id, "title": "", "url": video_url}
+
+        duration = float(video.get("duration") or 0)
+        if duration and last_end > duration * 1.05 + 10:
+            raise RuntimeError(
+                "Transkrip di file ini lebih panjang daripada videonya "
+                f"({exchange.format_time(last_end)} lawan "
+                f"{exchange.format_time(duration)}). Mungkin file ini untuk "
+                "video lain."
+            )
+
+        exchange.save_transcript({
+            "title": video.get("title") or video_id,
+            "video_id": video_id,
+            "url": video.get("url") or video_url,
+            "channel": video.get("channel", ""),
+            "width": video.get("width"),
+            "height": video.get("height"),
+            "duration": duration or last_end,
+            "language": "",
+            "source": "import",
+            "import_file": filename,
+            "parser_version": PARSER_VERSION,
+            "segments": parsed["segments"],
+            "words": parsed["words"]
+        })
+    except Exception as error:
+        _update_job(
+            ANALYZE_JOBS, job_id, status="error", stage="Analisis gagal",
+            error=f"Gagal mengimpor transkrip: {str(error)[:600]}"
+        )
+        return
+
+    # Transkrip sudah tersimpan, jadi analisis biasa langsung memakainya.
+    _analyze_worker(job_id, video_url, mode)
+
+
+@app.route("/transkrip/impor", methods=["POST"])
+def transkrip_impor():
+    video_url = request.form.get("youtube_url", "").strip()
+    mode = request.form.get("mode", "zoi")
+    upload = request.files.get("transcript_file")
+
+    if mode not in MODES:
+        return _transkrip_page("Mode analisis tidak dikenal.", 400)
+
+    video_id, error = _youtube_id_or_error(video_url)
+    if error:
+        return _transkrip_page(error, 400, youtube_url=video_url)
+
+    if not upload or not upload.filename:
+        return _transkrip_page(
+            "Pilih file transkrip (.srt atau .vtt) hasil Colab.", 400,
+            youtube_url=video_url
+        )
+
+    text = upload.read(app.config["MAX_CONTENT_LENGTH"]).decode(
+        "utf-8-sig", errors="replace"
+    )
+    parsed = transcript_from_vtt(text)
+
+    if not parsed["segments"]:
+        return _transkrip_page(
+            "File ini tidak berisi transkrip bertimestamp. Gunakan file "
+            ".srt atau .vtt hasil notebook Colab ZOI.", 400,
+            youtube_url=video_url
+        )
+
+    job_id = _new_job(
+        ANALYZE_JOBS, stage="Menyiapkan", progress=None, video_id="", next=""
+    )
+    threading.Thread(
+        target=_import_worker,
+        args=(job_id, video_url, video_id, mode, parsed,
+              os.path.basename(upload.filename)[:80]),
+        daemon=True
+    ).start()
+
+    return render_template(
+        "analyzing.html", job_id=job_id, video_url=video_url, downloads=False
     )
 
 

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Mengunduh audio - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card" aria-live="polite">
+  <h1>Mengunduh audio</h1>
+  <p class="muted" style="overflow-wrap:anywhere">{{ video_url }}</p>
+  <div class="bar busy" id="bar"><div></div></div>
+  <p class="percent" id="percent" hidden>0%</p>
+  <p id="stage" style="margin-top:10px">Menyiapkan...</p>
+  <div id="result"></div>
+  <a class="btn secondary" style="margin-top:12px" href="{{ url_for('transkrip_page') }}">Kembali ke langkah-langkah Colab</a>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var bar = document.getElementById("bar");
+  var fill = bar.firstElementChild;
+  var percent = document.getElementById("percent");
+  var stage = document.getElementById("stage");
+  var result = document.getElementById("result");
+
+  function message(kind, text) {
+    var box = document.createElement("div");
+    box.className = "alert " + kind;
+    box.textContent = text;
+    return box;
+  }
+
+  async function check() {
+    try {
+      var response = await fetch("{{ url_for('transkrip_audio_status', job_id=job_id) }}", {cache: "no-store"});
+      if (response.status === 404) {
+        result.replaceChildren(message("bad", "Proses tidak ditemukan. Aplikasi mungkin baru dijalankan ulang."));
+        return;
+      }
+      var data = await response.json();
+      stage.textContent = data.stage || "";
+      if (typeof data.progress === "number") {
+        bar.classList.remove("busy");
+        fill.style.width = data.progress + "%";
+        percent.hidden = false;
+        percent.textContent = data.progress + "%";
+      }
+      if (data.status === "done") {
+        var link = document.createElement("a");
+        link.className = "btn";
+        link.href = "{{ url_for('home') }}transkrip/audio/file/" + encodeURIComponent(data.filename);
+        link.textContent = "Simpan file audio (" + data.size_mb + " MB)";
+        result.replaceChildren(
+          message("ok", "Audio siap. Simpan filenya, lalu unggah ke notebook Colab di langkah 2."), link
+        );
+        return;
+      }
+      if (data.status === "error") {
+        bar.classList.remove("busy");
+        result.replaceChildren(message("bad", data.error || "Audio gagal diunduh."));
+        return;
+      }
+      setTimeout(check, 1000);
+    } catch (error) {
+      stage.textContent = "Menghubungkan kembali...";
+      setTimeout(check, 2000);
+    }
+  }
+  check();
+})();
+</script>
+{% endblock %}

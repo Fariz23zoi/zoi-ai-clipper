@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Transkrip lewat Colab - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card">
+  <p class="step">Pilihan tambahan &middot; Video tanpa subtitle</p>
+  <h1>Transkrip lewat Google Colab</h1>
+  <p class="muted" style="margin:0">Untuk laptop yang lambat. Google Colab meminjamkan komputer ber-GPU secara gratis lewat browser;
+    cukup akun Google, tanpa API key. Transkrip dibuat di sana, lalu diimpor ke ZOI.</p>
+</section>
+
+{% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+
+<form class="card" method="POST" action="{{ url_for('transkrip_audio') }}">
+  <h2>1. Unduh audionya</h2>
+  <p class="muted">ZOI mengunduh suara videonya saja (sekitar 0,5 MB per menit).</p>
+  <label class="field" for="audio_url">Link YouTube</label>
+  <input type="url" id="audio_url" name="youtube_url" inputmode="url" autocomplete="off"
+         placeholder="https://www.youtube.com/watch?v=..." value="{{ youtube_url or '' }}" required>
+  <button class="btn" type="submit" style="margin-top:12px">Unduh audio</button>
+</form>
+
+<section class="card">
+  <h2>2. Buat transkrip di Colab</h2>
+  <ol class="steps">
+    <li>Unduh notebook ZOI: <a class="btn secondary inline" href="{{ url_for('transkrip_notebook') }}">Unduh notebook (.ipynb)</a></li>
+    <li>Buka <a href="https://colab.research.google.com/" target="_blank" rel="noopener">colab.research.google.com</a>, masuk dengan akun Google,
+      lalu pilih <strong>File &rarr; Upload notebook</strong> dan pilih file notebook tadi.</li>
+    <li>Pilih <strong>Runtime &rarr; Change runtime type &rarr; T4 GPU</strong>, lalu <strong>Save</strong>.</li>
+    <li>Pilih <strong>Runtime &rarr; Run all</strong>. Saat diminta, pilih file audio dari langkah 1.</li>
+    <li>Setelah selesai, file <strong>.srt</strong> terunduh otomatis ke laptop.</li>
+  </ol>
+  <p class="muted">GPU gratis Colab dibatasi waktu pemakaian dan kadang sedang tidak tersedia. Bila tidak ada GPU, notebook tetap jalan tetapi jauh lebih lambat.</p>
+</section>
+
+<form class="card" method="POST" action="{{ url_for('transkrip_impor') }}" enctype="multipart/form-data">
+  <h2>3. Impor transkripnya ke ZOI</h2>
+  <label class="field" for="impor_url">Link YouTube yang sama</label>
+  <input type="url" id="impor_url" name="youtube_url" inputmode="url" autocomplete="off"
+         placeholder="https://www.youtube.com/watch?v=..." value="{{ youtube_url or '' }}" required>
+
+  <label class="field" for="transcript_file" style="margin-top:12px">File transkrip (.srt atau .vtt)</label>
+  <input type="file" id="transcript_file" name="transcript_file" accept=".srt,.vtt,text/plain" required>
+
+  <fieldset class="modes" style="margin-top:16px">
+    <legend>Mode analisis</legend>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="zoi" checked>
+      <span class="body"><strong>ZOI</strong><small>Analisis lokal, langsung ke daftar klip</small></span></label>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="claude">
+      <span class="body"><strong>Claude</strong><small>Salin prompt ke Claude, tempel jawabannya</small></span></label>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="chatgpt">
+      <span class="body"><strong>ChatGPT</strong><small>Salin prompt ke ChatGPT, tempel jawabannya</small></span></label>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="hybrid">
+      <span class="body"><strong>Hybrid</strong><small>Claude dan ChatGPT sekaligus</small></span></label>
+  </fieldset>
+
+  <button class="btn" type="submit" style="margin-top:14px">Impor dan analisis</button>
+</form>
+
+<a class="btn secondary" style="margin-top:14px" href="{{ url_for('home') }}">Kembali ke halaman utama</a>
+{% endblock %}
