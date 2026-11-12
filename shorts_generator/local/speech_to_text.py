@@ -10,6 +10,7 @@ tidak perlu tahu dari mana transkrip berasal.
 """
 import importlib.util
 import os
+import subprocess
 import threading
 
 from ..config import PROJECT_ROOT
@@ -22,7 +23,7 @@ MODEL_NAME = os.getenv("ZOI_WHISPER_MODEL", "small").strip() or "small"
 # "auto": bahasa dideteksi dari suara. Bisa dipaksa, misalnya "id".
 LANGUAGE = os.getenv("ZOI_WHISPER_LANGUAGE", "auto").strip().lower() or "auto"
 
-# 1 = paling cepat. 5 sedikit lebih akurat tetapi kira-kira dua kali lebih lama.
+# 1 = paling cepat. 5 sedikit lebih akurat dan sedikit lebih lambat.
 try:
     BEAM_SIZE = max(1, int(os.getenv("ZOI_WHISPER_BEAM", "1")))
 except ValueError:
@@ -148,6 +149,40 @@ def _get_model(report):
     return model
 
 
+SAMPLING_RATE = 16000
+
+
+def read_audio(media_path):
+    """Baca suara file audio/video sebagai 16 kHz mono float32 lewat FFmpeg.
+
+    Tidak memakai decode_audio milik faster-whisper: versi terbarunya
+    (1.2.1) tidak cocok dengan pustaka av 19 sehingga gagal membaca file.
+    FFmpeg sudah wajib terpasang untuk ZOI, jadi cara ini selalu tersedia.
+    """
+    import numpy
+
+    command = [
+        "ffmpeg", "-nostdin", "-v", "error", "-i", media_path,
+        "-vn", "-ac", "1", "-ar", str(SAMPLING_RATE), "-f", "f32le", "-",
+    ]
+
+    try:
+        result = subprocess.run(command, capture_output=True)
+    except OSError as error:
+        raise RuntimeError(f"FFmpeg tidak bisa dijalankan: {error}") from error
+
+    if result.returncode:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"Audio gagal dibaca: {detail[-300:]}")
+
+    audio = numpy.frombuffer(result.stdout, dtype=numpy.float32)
+
+    if not audio.size:
+        raise RuntimeError("File ini tidak berisi suara.")
+
+    return audio
+
+
 def _choose_language(model, audio, hint):
     """Bahasa untuk transkripsi.
 
@@ -197,9 +232,19 @@ def _segment_words(segment):
         if not text:
             continue
         start = float(word.start)
-        items.append({
-            "time": start, "end": max(start, float(word.end)), "text": text
-        })
+        end = max(start, float(word.end))
+
+        # Whisper memecah kata ulang ("teman" + "-teman") dan angka
+        # ("800" + ".000"); satukan lagi.
+        joins = text.startswith("-") or (
+            text[0] in ".," and len(text) > 1 and text[1].isdigit()
+        )
+        if joins and items:
+            items[-1]["text"] += text
+            items[-1]["end"] = max(items[-1]["end"], end)
+            continue
+
+        items.append({"time": start, "end": end, "text": text})
 
     if items:
         return items
@@ -234,8 +279,7 @@ def transcribe_file(media_path, report=None, language_hint=None,
 
         if audio is None:
             report("Membaca audio", None)
-            from faster_whisper.audio import decode_audio
-            audio = decode_audio(media_path)
+            audio = read_audio(media_path)
 
         report("Mendeteksi bahasa", None)
         language = _choose_language(model, audio, language_hint)

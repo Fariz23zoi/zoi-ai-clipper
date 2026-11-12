@@ -107,6 +107,31 @@ class TranscribeFileTest(unittest.TestCase):
         for before, after in zip(result["segments"], result["segments"][1:]):
             self.assertLessEqual(before["end"], after["start"])
 
+    def test_reduplicated_words_are_joined(self):
+        segment = _segment(0.0, 3.0, [
+            _word(0.0, 0.5, "Selamat"), _word(0.5, 0.9, "teman"),
+            SimpleNamespace(start=0.9, end=1.4, word=" -teman", probability=0.9),
+            _word(1.5, 2.0, "semua"),
+        ])
+        result = self.run_with(FakeModel([segment], duration=3.0))
+        self.assertEqual(
+            [w["text"] for w in result["words"]], ["Selamat", "teman-teman", "semua"]
+        )
+        self.assertEqual(result["words"][1]["end"], 1.4)
+        self.assertEqual(result["segments"][0]["text"], "Selamat teman-teman semua")
+
+    def test_split_numbers_are_joined_but_sentences_are_not(self):
+        segment = _segment(0.0, 4.0, [
+            _word(0.0, 0.5, "harganya"), _word(0.5, 1.0, "Rp800"),
+            SimpleNamespace(start=1.0, end=1.3, word=" .000", probability=0.9),
+            _word(1.4, 2.0, "selesai."), _word(2.1, 2.5, "Oke"),
+        ])
+        result = self.run_with(FakeModel([segment], duration=4.0))
+        self.assertEqual(
+            [w["text"] for w in result["words"]],
+            ["harganya", "Rp800.000", "selesai.", "Oke"],
+        )
+
     def test_whisper_options(self):
         speech.BEAM_SIZE = 1
         model = FakeModel(_speech_segments())
@@ -190,6 +215,51 @@ class HelpersTest(unittest.TestCase):
     def test_models_live_inside_the_project_folder(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.assertEqual(speech.MODEL_DIR, os.path.join(root, "models"))
+
+
+def _has_numpy():
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        return False
+    return bool(shutil.which("ffmpeg"))
+
+
+@unittest.skipUnless(_has_numpy(), "numpy atau FFmpeg tidak terpasang")
+class ReadAudioTest(unittest.TestCase):
+    """Audio dibaca lewat FFmpeg, bukan lewat pustaka av."""
+
+    @classmethod
+    def setUpClass(cls):
+        from tests.helpers import make_test_video
+        cls.folder = tempfile.mkdtemp()
+        cls.video = make_test_video(os.path.join(cls.folder, "v.mp4"), seconds=3)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.folder, ignore_errors=True)
+
+    def test_video_file_gives_16khz_mono_samples(self):
+        audio = speech.read_audio(self.video)
+        self.assertEqual(str(audio.dtype), "float32")
+        self.assertAlmostEqual(len(audio) / speech.SAMPLING_RATE, 3.0, delta=0.1)
+        self.assertGreater(float(abs(audio).max()), 0.05)
+
+    def test_missing_file_is_explained(self):
+        with self.assertRaises(RuntimeError) as caught:
+            speech.read_audio(os.path.join(self.folder, "tidak_ada.mp4"))
+        self.assertIn("Audio gagal dibaca", str(caught.exception))
+
+    def test_video_without_sound_is_explained(self):
+        import subprocess
+        silent = os.path.join(self.folder, "bisu.mp4")
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+             "-i", "testsrc=size=320x240:rate=10", "-t", "1", "-an", silent],
+            check=True,
+        )
+        with self.assertRaises(RuntimeError):
+            speech.read_audio(silent)
 
 
 @unittest.skipUnless(speech.is_available(), "faster-whisper tidak terpasang")
@@ -477,12 +547,11 @@ class RealModelTest(unittest.TestCase):
             self.skipTest("file audio uji tidak ada")
 
         from faster_whisper import WhisperModel
-        from faster_whisper.audio import decode_audio
 
         model = WhisperModel(
             os.environ["ZOI_TEST_WHISPER_MODEL"], device="cpu", compute_type="int8"
         )
-        audio = decode_audio(audio_path)[: 16000 * 120]
+        audio = speech.read_audio(audio_path)[: 16000 * 120]
         result = speech.transcribe_file(audio_path, model=model, audio=audio)
 
         self.assertEqual(result["language"], "id")

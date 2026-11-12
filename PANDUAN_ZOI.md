@@ -198,4 +198,4 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_SPEECH` | `1` | Isi `0` untuk mematikan pengenal suara |
 | `ZOI_WHISPER_MODEL` | `small` | `base` lebih cepat tetapi kurang akurat; `medium` lebih akurat tetapi jauh lebih lambat |
 | `ZOI_WHISPER_LANGUAGE` | `auto` | Paksa bahasa, misalnya `id` |
-| `ZOI_WHISPER_BEAM` | `1` | `5` sedikit lebih akurat, kira-kira dua kali lebih lama |
+| `ZOI_WHISPER_BEAM` | `1` | `5` sedikit lebih akurat dan sedikit lebih lambat |
