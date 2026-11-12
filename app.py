@@ -13,10 +13,13 @@ Jalankan:  python app.py
 import json
 import os
 import re
+import socket
 import subprocess
+import sys
 import threading
 import time
 import uuid
+import webbrowser
 
 from flask import (
     Flask, Response, abort, jsonify, redirect, render_template, request,
@@ -36,6 +39,16 @@ from shorts_generator.local.transcriber_youtube import (
     PARSER_VERSION, transcribe_from_youtube,
 )
 from shorts_generator.zoi_engine import analyze_transcript
+
+# Konsol Windows tidak selalu bisa mencetak semua karakter (misalnya tanda
+# panah di log unduhan). Karakter seperti itu diganti, bukan menghentikan
+# unduhan atau render.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except (ValueError, OSError):
+            pass
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
@@ -1111,10 +1124,77 @@ def too_large(_error):
     return "File terlalu besar (batas 2 MB).", 413
 
 
+# ------------------------------------------------------------- menjalankan
+
+def _lan_address():
+    """Alamat perangkat ini di jaringan Wi-Fi/LAN, atau None bila tidak ada.
+
+    Soket UDP hanya dipakai untuk menanyakan rute; tidak ada data terkirim.
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))
+            address = probe.getsockname()[0]
+    except OSError:
+        return None
+
+    if not address or address.startswith("127.") or address == "0.0.0.0":
+        return None
+    return address
+
+
+def _local_url(host, port):
+    local = host in ("0.0.0.0", "::", "127.0.0.1", "localhost", "")
+    return f"http://{'127.0.0.1' if local else host}:{port}"
+
+
+def _startup_lines(host, port):
+    """Petunjuk yang dicetak saat aplikasi mulai berjalan."""
+    lines = [
+        "ZOI AI CLIPPER berjalan.",
+        f"Buka di browser perangkat ini: {_local_url(host, port)}"
+    ]
+
+    if host in ("0.0.0.0", "::"):
+        address = _lan_address()
+        if address:
+            lines.append(
+                f"Buka dari HP di Wi-Fi yang sama: http://{address}:{port}"
+            )
+        else:
+            lines.append(
+                "Alamat Wi-Fi perangkat ini tidak terbaca. Pastikan sudah "
+                "tersambung ke Wi-Fi, lalu jalankan lagi."
+            )
+        lines.append(
+            "Siapa pun di Wi-Fi yang sama bisa membuka dashboard ini."
+        )
+
+    lines.append("Untuk berhenti: tekan Ctrl+C atau tutup jendela ini.")
+    return lines
+
+
+def _open_browser(url):
+    try:
+        webbrowser.open(url)
+    except Exception:  # tidak ada browser: cukup buka alamatnya sendiri
+        pass
+
+
 if __name__ == "__main__":
-    # Bawaan hanya bisa dibuka dari HP ini sendiri. Untuk membuka dari
-    # perangkat lain di Wi-Fi yang sama: ZOI_HOST=0.0.0.0 python app.py
-    host = os.getenv("ZOI_HOST", "127.0.0.1")
+    # Bawaan hanya bisa dibuka dari perangkat ini sendiri. Untuk membuka
+    # dari HP di Wi-Fi yang sama: ZOI_HOST=0.0.0.0 (lihat PANDUAN_ZOI.md).
+    host = os.getenv("ZOI_HOST", "127.0.0.1").strip() or "127.0.0.1"
     port = int(os.getenv("ZOI_PORT", "5000"))
-    print(f"ZOI AI CLIPPER berjalan di http://{host}:{port}", flush=True)
+
+    for line in _startup_lines(host, port):
+        print(line, flush=True)
+
+    if os.getenv("ZOI_OPEN_BROWSER", "").strip().lower() in (
+        "1", "true", "yes", "ya"
+    ):
+        timer = threading.Timer(1.5, _open_browser, args=(_local_url(host, port),))
+        timer.daemon = True
+        timer.start()
+
     app.run(host=host, port=port, debug=False, threaded=True)

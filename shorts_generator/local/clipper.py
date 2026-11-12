@@ -113,7 +113,8 @@ def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errors:
         proc = subprocess.Popen(
             _with_low_priority(command), stdout=subprocess.PIPE,
-            stderr=errors, stdin=subprocess.DEVNULL, text=True, bufsize=1
+            stderr=errors, stdin=subprocess.DEVNULL, text=True, bufsize=1,
+            encoding="utf-8", errors="replace"
         )
         try:
             for line in proc.stdout:

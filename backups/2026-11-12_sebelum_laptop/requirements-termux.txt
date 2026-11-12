@@ -1,0 +1,7 @@
+# Kebutuhan dashboard ZOI AI CLIPPER di Android Termux.
+# Pasang: pip install -r requirements-termux.txt
+# FFmpeg dan Node dipasang lewat: pkg install ffmpeg nodejs
+flask>=3.0
+yt-dlp>=2024.1.1
+python-dotenv>=1.0
+requests>=2.31

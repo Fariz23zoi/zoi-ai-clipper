@@ -1,22 +1,72 @@
 # Panduan ZOI AI CLIPPER
 
-Dashboard lokal untuk membuat video Shorts 9:16 dari video YouTube, berjalan di Android Termux tanpa API key.
+Dashboard lokal untuk membuat video Shorts 9:16 dari video YouTube, tanpa API key. Bisa dijalankan di laptop (Windows, Linux, macOS) atau di Android Termux.
 
-## Memasang
+## Memasang di laptop Windows
+
+Laptop lebih kuat daripada HP, jadi unduhan dan render jauh lebih cepat.
+
+**1. Pasang empat program.** Buka **PowerShell** (tekan tombol Windows, ketik `PowerShell`, Enter), lalu jalankan satu per satu. Bila ditanya persetujuan, ketik `Y` lalu Enter.
+
+```powershell
+winget install -e --id Python.Python.3.13
+winget install -e --id Git.Git
+winget install -e --id Gyan.FFmpeg
+winget install -e --id OpenJS.NodeJS.LTS
+```
+
+**2. Tutup PowerShell, lalu buka lagi.** Program yang baru dipasang baru dikenali setelah jendela dibuka ulang.
+
+**3. Ambil ZOI AI CLIPPER.**
+
+```powershell
+cd $HOME
+git clone -b claude/zoi-clipper-audit-vuj4yd https://github.com/Fariz23zoi/zoi-ai-clipper.git
+```
+
+Karena repo ini privat, akan muncul jendela login GitHub. Masuk dengan akun GitHub Anda.
+
+**4. Jalankan.** Buka File Explorer, masuk ke folder `zoi-ai-clipper` di dalam folder pengguna Anda, lalu klik dua kali **`mulai_windows.bat`**. Pertama kali butuh beberapa menit untuk menyiapkan Python. Setelah itu browser terbuka sendiri di `http://127.0.0.1:5000`.
+
+| File | Guna |
+|---|---|
+| `mulai_windows.bat` | Menjalankan dashboard di laptop |
+| `mulai_windows_hp.bat` | Menjalankan dashboard supaya juga bisa dibuka dari HP |
+| `perbarui_windows.bat` | Mengambil versi terbaru (tutup dulu jendela ZOI yang sedang jalan) |
+
+Untuk berhenti, tutup jendela hitam ZOI atau tekan `Ctrl` + `C` di dalamnya.
+
+### Membuka dashboard dari HP
+
+1. Laptop dan HP harus tersambung ke Wi-Fi yang sama.
+2. Klik dua kali `mulai_windows_hp.bat`.
+3. Bila Windows menanyakan izin firewall untuk Python, pilih **Allow** untuk jaringan pribadi (Private).
+4. Di jendela ZOI tertulis alamat seperti `http://192.168.1.23:5000`. Ketik alamat itu di browser HP.
+
+Laptop yang mengunduh dan merender; HP hanya menjadi layar. Selama mode ini aktif, siapa pun di Wi-Fi yang sama bisa membuka dashboard, jadi pakai hanya di Wi-Fi rumah.
+
+## Memasang di laptop Linux atau macOS
+
+Pasang Python 3, Git, FFmpeg, dan Node.js lewat pengelola paket (misalnya `sudo apt install python3-venv git ffmpeg nodejs` atau `brew install python git ffmpeg node`), lalu:
+
+```bash
+git clone -b claude/zoi-clipper-audit-vuj4yd https://github.com/Fariz23zoi/zoi-ai-clipper.git
+cd zoi-ai-clipper
+bash mulai.sh
+```
+
+`ZOI_HOST=0.0.0.0 bash mulai.sh` membuat dashboard bisa dibuka dari HP. `bash perbarui.sh` mengambil versi terbaru.
+
+## Memasang di Android Termux
 
 ```bash
 pkg install python ffmpeg nodejs git
 pip install -r requirements-termux.txt
-```
-
-## Menjalankan
-
-```bash
 cd ~/projects/ZOI-AI-CLIPPER
 python app.py
 ```
 
-Buka `http://127.0.0.1:5000` di browser HP. Untuk membuka dari perangkat lain di Wi-Fi yang sama, jalankan `ZOI_HOST=0.0.0.0 python app.py`.
+Buka `http://127.0.0.1:5000` di browser HP.
 
 ## Alur pakai
 
@@ -121,7 +171,8 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 
 | Nama | Bawaan | Guna |
 |---|---|---|
-| `ZOI_HOST` | `127.0.0.1` | Alamat dashboard |
+| `ZOI_HOST` | `127.0.0.1` | Alamat dashboard; `0.0.0.0` agar bisa dibuka dari HP di Wi-Fi yang sama |
+| `ZOI_OPEN_BROWSER` | kosong | Isi `1` agar browser terbuka sendiri saat aplikasi mulai |
 | `ZOI_PORT` | `5000` | Port dashboard |
 | `ZOI_RENDER_PRESET` | `veryfast` | `ultrafast` lebih cepat, file lebih besar |
 | `ZOI_RENDER_CRF` | `23` | Lebih kecil = kualitas lebih tinggi |
