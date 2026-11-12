@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Menganalisis - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card" aria-live="polite">
+  <h1>Menganalisis video</h1>
+  <p class="muted" style="overflow-wrap:anywhere">{{ video_url }}</p>
+  <div class="bar busy" id="bar"><div></div></div>
+  <p class="percent" id="percent" hidden>0%</p>
+  <p id="stage" style="margin-top:10px">Menyiapkan...</p>
+  {% if downloads %}
+  <p class="muted">Jangan tutup halaman ini. Video yang panjang perlu waktu lebih lama untuk diunduh.</p>
+  {% else %}
+  <p class="muted">Jangan tutup halaman ini. Tahap ini hanya mengambil subtitle; video baru diunduh saat Anda merender klip.</p>
+  {% endif %}
+  <div id="result"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var bar = document.getElementById("bar");
+  var fill = bar.firstElementChild;
+  var percent = document.getElementById("percent");
+  var stage = document.getElementById("stage");
+  var result = document.getElementById("result");
+
+  function show(data) {
+    stage.textContent = data.stage || "";
+    if (typeof data.progress === "number") {
+      bar.classList.remove("busy");
+      fill.style.width = data.progress + "%";
+      percent.hidden = false;
+      percent.textContent = data.progress + "%";
+    } else {
+      bar.classList.add("busy");
+      fill.style.width = "";
+      percent.hidden = true;
+    }
+  }
+
+  function fail(message) {
+    bar.classList.remove("busy");
+    fill.style.width = "0%";
+    percent.hidden = true;
+    var box = document.createElement("div");
+    box.className = "alert bad";
+    box.setAttribute("role", "alert");
+    box.textContent = message;
+    var back = document.createElement("a");
+    back.className = "btn secondary";
+    back.style.marginTop = "12px";
+    back.href = "{{ url_for('home') }}";
+    back.textContent = "Kembali dan coba lagi";
+    result.replaceChildren(box, back);
+  }
+
+  async function check() {
+    try {
+      var response = await fetch("{{ url_for('analyze_status', job_id=job_id) }}", {cache: "no-store"});
+      if (response.status === 404) {
+        fail("Proses analisis tidak ditemukan. Aplikasi mungkin baru dijalankan ulang.");
+        return;
+      }
+      var data = await response.json();
+      show(data);
+      if (data.status === "done") {
+        // Mode AI tanpa API key lanjut ke halaman ekspor/impor.
+        window.location.href = "{{ url_for('home') }}video/" + encodeURIComponent(data.video_id)
+          + (data.next === "ai" ? "/ai" : "");
+        return;
+      }
+      if (data.status === "error") {
+        fail(data.error || "Analisis gagal.");
+        return;
+      }
+      setTimeout(check, 1000);
+    } catch (error) {
+      stage.textContent = "Menghubungkan kembali...";
+      setTimeout(check, 2000);
+    }
+  }
+  check();
+})();
+</script>
+{% endblock %}

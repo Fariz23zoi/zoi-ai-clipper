@@ -1,0 +1,5 @@
+# Pengenal suara untuk video tanpa subtitle (opsional, hanya untuk laptop).
+# Dipasang otomatis oleh mulai_windows.bat dan mulai.sh.
+# Manual: pip install -r requirements-speech.txt
+# Model (sekitar 460 MB untuk "small") diunduh sekali saat pertama dipakai.
+faster-whisper>=1.1

@@ -121,6 +121,26 @@ class LauncherFilesTest(unittest.TestCase):
         # jendela begitu saja.
         self.assertGreaterEqual(text.count("& pause & exit /b 1)"), 4)
 
+    def test_speech_recognition_is_installed_but_not_required(self):
+        self.assertTrue((ROOT / "requirements-speech.txt").is_file())
+        self.assertIn(
+            "faster-whisper",
+            (ROOT / "requirements-speech.txt").read_text(encoding="utf-8"),
+        )
+
+        text = self.read("mulai_windows.bat")
+        start = text.index("import faster_whisper")
+        block = text[start:text.index("set ZOI_OPEN_BROWSER")]
+        self.assertIn("requirements-speech.txt", block)
+        # Kegagalan memasang tidak menghentikan peluncur.
+        self.assertNotIn("exit /b", block)
+        self.assertLess(start, text.index('".venv\\Scripts\\python.exe" app.py'))
+
+        text = self.read("mulai.sh")
+        self.assertIn("requirements-speech.txt", text)
+        self.assertIn("TERMUX_VERSION", text)
+        self.assertIn('|| echo "[!] Pengenal suara gagal dipasang', text)
+
     def test_phone_launcher_shares_on_wifi_and_reuses_main_launcher(self):
         text = self.read("mulai_windows_hp.bat")
         self.assertIn("set ZOI_HOST=0.0.0.0", text)

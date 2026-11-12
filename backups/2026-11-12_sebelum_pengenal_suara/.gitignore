@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+output/
+*.mp4
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+.env
+*.mp4
+*.mkv
+*.webm
+*.m4a
+*.part

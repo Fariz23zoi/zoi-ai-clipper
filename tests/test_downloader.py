@@ -101,6 +101,31 @@ class FormatSelectionTest(unittest.TestCase):
     def test_single_file_format_still_works(self):
         self.assertEqual(self.pick(MUXED, "480"), "18")
 
+    def pick_audio(self, formats):
+        info = {
+            "id": "x", "title": "t", "extractor": "test",
+            "extractor_key": "Test", "webpage_url": "http://contoh",
+            "formats": copy.deepcopy(formats),
+        }
+        options = {
+            "quiet": True, "no_warnings": True, "simulate": True,
+            **downloader.AUDIO_FORMAT_OPTIONS,
+        }
+        with yt_dlp.YoutubeDL(options) as ydl:
+            return ydl.process_ie_result(info, download=False).get("format_id")
+
+    def test_audio_for_speech_is_about_64_kbps_and_audio_only(self):
+        self.assertEqual(self.pick_audio(LANDSCAPE), "249")
+        ultralow = [_audio("600", "webm", "opus", 35)]
+        self.assertEqual(self.pick_audio(LANDSCAPE + ultralow), "249")
+        self.assertEqual(
+            self.pick_audio([_audio("140", "m4a", "mp4a.40.2", 129)] + ultralow),
+            "600",
+        )
+
+    def test_audio_falls_back_to_a_single_file_format(self):
+        self.assertEqual(self.pick_audio(MUXED), "18")
+
     def test_bad_height_falls_back_to_720(self):
         self.assertEqual(
             downloader._format_options("abc")["format_sort"][0], "res:720"

@@ -74,13 +74,24 @@ Dashboard terdiri dari tiga halaman.
 
 **Halaman 1: tempel link.** Tempel link YouTube, pilih mode, tekan **Analisis video**. Video harus punya subtitle/CC bahasa Indonesia atau Inggris. Analisis hanya mengambil subtitle, jadi cepat dan hemat kuota; video belum diunduh.
 
-Subtitle yang dicoba, berurutan: bahasa Indonesia, bahasa Inggris, lalu subtitle bahasa asli video. Bila YouTube sama sekali tidak menyediakan subtitle (termasuk subtitle otomatis), video itu belum bisa dianalisis. Bila subtitle ada tetapi gagal diunduh, pesan gagalnya menyertakan keterangan dari YouTube.
+Subtitle yang dicoba, berurutan: bahasa Indonesia, bahasa Inggris, lalu subtitle bahasa asli video. Bila subtitle tidak ada atau gagal diunduh, ZOI di laptop mengenali ucapan langsung dari suara video (lihat **Video tanpa subtitle** di bawah).
 
 **Halaman 2: analisis AI.** Hanya muncul pada mode Claude, ChatGPT, dan Hybrid. Salin prompt, tempel ke Claude atau ChatGPT, lalu tempel jawabannya dan tekan **Impor dan lihat hasil**. Mode ZOI melewati halaman ini.
 
 **Halaman 3: pilih klip.** Pilih **Kualitas render**, lalu tekan **Render klip ini** pada kandidat pilihan. Hasil analisis AI tampil paling atas, hasil ZOI Engine V4.1 dan V4.2 di bawahnya. Pada render pertama, video diunduh dulu (Langkah 1 dari 2, persentase dari yt-dlp), lalu dirender (Langkah 2 dari 2, persentase dari FFmpeg). Hasilnya bisa diputar dan diunduh; file tersimpan di `output/` dengan awalan `zoi_`.
 
-## Kualitas render
+## Video tanpa subtitle
+
+Bila YouTube tidak menyediakan subtitle, atau subtitlenya gagal diunduh, ZOI di laptop mengenali ucapan dari suara video dengan **Whisper** (pengenal suara yang berjalan di laptop sendiri, tanpa API key dan tanpa biaya).
+
+- **Hanya di laptop.** Di HP (Termux) fitur ini tidak tersedia; video tanpa subtitle tetap gagal dengan pesan yang menjelaskannya.
+- **Dipasang otomatis** oleh `mulai_windows.bat` atau `mulai.sh` (sekitar 200 MB). Manual: `pip install -r requirements-speech.txt`.
+- **Model diunduh sekali** saat pertama dipakai, sekitar 460 MB, ke folder `models/` di dalam folder ZOI.
+- **Yang diunduh hanya audionya**, lalu dihapus setelah transkrip jadi. Bila video sumber sudah ada di laptop, video itu yang dipakai.
+- **Butuh waktu.** Halaman analisis menampilkan kemajuannya, misalnya "Mengenali ucapan: 05:12 dari 27:04". Transkripnya disimpan, jadi menganalisis ulang video yang sama tidak mengulang proses ini.
+- **Bisa ada salah dengar.** Halaman kandidat memberi tanda bila transkrip berasal dari suara. Tonton klipnya sebelum diunggah.
+- **Bahasa dideteksi dari suara.** Bahasa Melayu, Jawa, dan Sunda ditulis sebagai bahasa Indonesia, karena Whisper sering tertukar di antara keempatnya.
+
 
 | Pilihan | Ukuran hasil | Video sumber yang diunduh |
 |---|---|---|
@@ -158,6 +169,7 @@ ZOI Engine selalu dijalankan pada semua mode; hasilnya tampil di bawah hasil AI.
 | `output/zoi_<id>_<mulai>-<selesai>_<kualitas>p_<judul>_<acak>.mp4` | Hasil render |
 | `output/data/<id>/transcript.json` | Transkrip tersimpan |
 | `output/data/<id>/analysis.json` | Kandidat ZOI dan hasil impor |
+| `models/` | Model pengenal suara (boleh dihapus; diunduh lagi bila perlu) |
 | `backups/` | Salinan file sebelum perubahan besar |
 
 ## Menguji
@@ -183,3 +195,7 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_RENDER_QUALITY` | `720` | Kualitas render bawaan: `240`, `360`, `480`, `720`, atau `1080` |
 | `ZOI_DOWNLOAD_AT_ANALYSIS` | kosong | Isi `1` bila video ingin langsung diunduh saat analisis |
 | `LOCAL_OUTPUT_DIR` | `output` | Folder hasil |
+| `ZOI_SPEECH` | `1` | Isi `0` untuk mematikan pengenal suara |
+| `ZOI_WHISPER_MODEL` | `small` | `base` lebih cepat tetapi kurang akurat; `medium` lebih akurat tetapi jauh lebih lambat |
+| `ZOI_WHISPER_LANGUAGE` | `auto` | Paksa bahasa, misalnya `id` |
+| `ZOI_WHISPER_BEAM` | `1` | `5` sedikit lebih akurat, kira-kira dua kali lebih lama |

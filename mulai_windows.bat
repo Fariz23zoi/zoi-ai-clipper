@@ -21,6 +21,12 @@ echo Memeriksa kebutuhan. Pertama kali bisa beberapa menit...
 ".venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r requirements-termux.txt
 if errorlevel 1 (echo [!] Gagal memasang kebutuhan. Periksa internet, lalu jalankan lagi. & pause & exit /b 1)
 
+rem Pengenal suara untuk video tanpa subtitle. Bila gagal dipasang, fitur lain tetap jalan.
+".venv\Scripts\python.exe" -c "import faster_whisper" >nul 2>nul
+if errorlevel 1 echo Memasang pengenal suara untuk video tanpa subtitle. Sekali saja, bisa beberapa menit...
+if errorlevel 1 ".venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r requirements-speech.txt
+if errorlevel 1 echo [!] Pengenal suara gagal dipasang. Video tanpa subtitle belum bisa dianalisis, fitur lain tetap jalan.
+
 set ZOI_OPEN_BROWSER=1
 ".venv\Scripts\python.exe" app.py
 

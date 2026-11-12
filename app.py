@@ -32,11 +32,12 @@ from shorts_generator.config import (
     CLAUDE_API_KEY, LOCAL_OUTPUT_DIR, OPENAI_API_KEY,
 )
 from shorts_generator.local.clipper import RENDER_SIZES, crop_clip_local
+from shorts_generator.local import speech_to_text
 from shorts_generator.local.downloader import (
-    _extract_youtube_video_id, download_youtube_local,
+    _extract_youtube_video_id, download_audio_local, download_youtube_local,
 )
 from shorts_generator.local.transcriber_youtube import (
-    PARSER_VERSION, transcribe_from_youtube,
+    PARSER_VERSION, SubtitlesUnavailable, transcribe_from_youtube,
 )
 from shorts_generator.zoi_engine import analyze_transcript
 
@@ -80,6 +81,18 @@ DOWNLOAD_AT_ANALYSIS = os.getenv(
 ).strip().lower() in ("1", "true", "yes", "ya")
 
 SOURCE_EXTENSIONS = (".mp4", ".mkv", ".webm")
+
+# Bila YouTube tidak menyediakan subtitle, ucapan dikenali dari suara video
+# (Whisper). Isi 0 untuk mematikan.
+SPEECH_ENABLED = os.getenv("ZOI_SPEECH", "1").strip().lower() not in (
+    "0", "false", "no", "tidak"
+)
+SPEECH_INSTALL_HINT = (
+    "Untuk video seperti ini ZOI bisa mengenali ucapan dari suara videonya, "
+    "tetapi pengenal suara (Whisper) belum terpasang. Di laptop, tutup "
+    "jendela ZOI lalu jalankan lagi mulai_windows.bat atau mulai.sh; "
+    "keduanya memasangnya otomatis. Fitur ini tidak tersedia di HP (Termux)."
+)
 
 ZOI_V41 = "ZOI ENGINE V4.1"
 ZOI_V42 = "ZOI ENGINE V4.2 (eksperimental)"
@@ -334,8 +347,8 @@ def _quality_options(analysis, source_path):
     return options
 
 
-def _download_source(video_url, tier, report):
-    """Unduh video sumber; `report(tahap, persen)` menerima progres yt-dlp."""
+def _progress_hook(report):
+    """Hook yt-dlp yang meneruskan kemajuan unduhan ke `report`."""
     def hook(status):
         state = status.get("status")
 
@@ -356,9 +369,15 @@ def _download_source(video_url, tier, report):
         else:
             report(f"{label} ({done / 1_048_576:.0f} MB)", None)
 
+    return hook
+
+
+def _download_source(video_url, tier, report):
+    """Unduh video sumber; `report(tahap, persen)` menerima progres yt-dlp."""
     report("Menghubungi YouTube", None)
     path = os.path.realpath(download_youtube_local(
-        video_url, fmt=str(tier), out_dir=OUTPUT_DIR, progress_hook=hook
+        video_url, fmt=str(tier), out_dir=OUTPUT_DIR,
+        progress_hook=_progress_hook(report)
     ))
     root = os.path.realpath(OUTPUT_DIR)
 
@@ -556,6 +575,94 @@ def _transcript_aspect(transcript):
     return round(width / height, 4) if width > 0 and height > 0 else None
 
 
+def _audio_files(video_id):
+    prefix = f"audio_{video_id}."
+    try:
+        names = os.listdir(OUTPUT_DIR)
+    except OSError:
+        return []
+    return [
+        os.path.join(OUTPUT_DIR, name) for name in names
+        if name.startswith(prefix)
+    ]
+
+
+def _transcribe_speech(video_url, error, stage):
+    """Buat transkrip dari suara video bila subtitle tidak bisa dipakai.
+
+    Memakai video sumber bila sudah ada di HP/laptop; selain itu hanya
+    audionya yang diunduh, lalu dihapus setelah transkrip jadi.
+    """
+    video = error.video
+    video_id = str(video.get("video_id") or "")
+
+    if not SPEECH_ENABLED:
+        raise RuntimeError(str(error))
+
+    if not speech_to_text.is_available():
+        raise RuntimeError(f"{error} {SPEECH_INSTALL_HINT}")
+
+    if not exchange.is_valid_video_id(video_id):
+        raise RuntimeError("ID video dari YouTube tidak valid.")
+
+    if error.reason == "none":
+        stage("Video ini tidak punya subtitle. Transkrip dibuat dari suara", None)
+    else:
+        stage("Subtitle gagal diambil. Transkrip dibuat dari suara", None)
+
+    media = _source_path({"video_id": video_id})
+
+    try:
+        if not media:
+            stage("Mengunduh audio", None)
+            try:
+                media = download_audio_local(
+                    video_url, out_dir=OUTPUT_DIR,
+                    progress_hook=_progress_hook(stage)
+                )
+            except Exception as download_error:
+                raise RuntimeError(
+                    f"{error} Audio untuk pengenal suara juga gagal "
+                    f"diunduh: {str(download_error)[:300]}"
+                ) from download_error
+
+        result = speech_to_text.transcribe_file(
+            media, report=stage, language_hint=video.get("language")
+        )
+    finally:
+        for path in _audio_files(video_id):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    if not result["segments"]:
+        raise RuntimeError(
+            "Pengenal suara tidak menemukan ucapan di video ini. Mungkin "
+            "isinya hanya musik atau suara tanpa kata-kata."
+        )
+
+    return {
+        "title": video.get("title", ""),
+        "video_id": video_id,
+        "url": video.get("url") or video_url,
+        "channel": video.get("channel", ""),
+        "width": video.get("width"),
+        "height": video.get("height"),
+        "duration": float(
+            video.get("duration") or result.get("duration")
+            or max(segment["end"] for segment in result["segments"])
+        ),
+        "language": result["language"],
+        "source": "whisper",
+        "speech_model": result.get("model", ""),
+        "speech_reason": error.reason,
+        "parser_version": PARSER_VERSION,
+        "segments": result["segments"],
+        "words": result["words"]
+    }
+
+
 def _analyze_worker(job_id, video_url, mode):
     def stage(text, progress=None):
         _update_job(ANALYZE_JOBS, job_id, stage=text, progress=progress)
@@ -572,7 +679,10 @@ def _analyze_worker(job_id, video_url, mode):
                 transcript = cached
 
         if transcript is None:
-            transcript = transcribe_from_youtube(video_url)
+            try:
+                transcript = transcribe_from_youtube(video_url)
+            except SubtitlesUnavailable as error:
+                transcript = _transcribe_speech(video_url, error, stage)
             if not exchange.is_valid_video_id(transcript.get("video_id")):
                 raise RuntimeError("ID video dari YouTube tidak valid.")
             exchange.save_transcript(transcript)
@@ -584,10 +694,25 @@ def _analyze_worker(job_id, video_url, mode):
         notices = []
         groups = _run_zoi_engines(transcript)
 
+        from_speech = transcript.get("source") == "whisper"
+        if from_speech:
+            why = (
+                "tidak menyediakan subtitle"
+                if transcript.get("speech_reason") == "none"
+                else "gagal mengirim subtitle"
+            )
+            notices.append(
+                f"YouTube {why} untuk video ini, jadi transkrip dibuat dari "
+                "suara video dengan pengenal suara (Whisper "
+                f"{transcript.get('speech_model') or ''}). Bisa ada kata yang "
+                "salah dengar; tonton klipnya sebelum diunggah."
+            )
+
         language = str(transcript.get("language") or "")
         if language and not language.lower().startswith("id"):
             notices.append(
-                f"Subtitle video ini berbahasa \"{language}\", bukan "
+                f"{'Ucapan' if from_speech else 'Subtitle'} video ini "
+                f"berbahasa \"{language}\", bukan "
                 "Indonesia. ZOI Engine memakai kata kunci bahasa Indonesia, "
                 "jadi kandidatnya bisa sedikit atau kurang tepat. Analisis "
                 "Claude atau ChatGPT tetap bisa dipakai."

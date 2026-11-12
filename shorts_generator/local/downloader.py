@@ -106,6 +106,42 @@ def _existing_download(out_dir: str, video_id: str) -> Optional[str]:
     return None
 
 
+# Audio sekitar 64 kbps: cukup untuk mengenali ucapan, jauh lebih kecil
+# daripada video.
+AUDIO_FORMAT_OPTIONS = {"format": "bestaudio/best", "format_sort": ["abr~64"]}
+
+
+def download_audio_local(video_url: str, out_dir: Optional[str] = None,
+                         progress_hook=None) -> str:
+    """Unduh audio saja, untuk pengenal suara.
+
+    Dipilih audio sekitar 64 kbps: cukup untuk mengenali ucapan dan jauh
+    lebih kecil daripada video. File disimpan sebagai audio_<id>.<ext>.
+    """
+    yt_dlp = _import_ytdlp()
+    out_dir = out_dir or LOCAL_OUTPUT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+
+    ydl_opts = {
+        **AUDIO_FORMAT_OPTIONS,
+        "outtmpl": os.path.join(out_dir, "audio_%(id)s.%(ext)s"),
+        "quiet": True,
+        "no_warnings": True,
+        "js_runtimes": {"node": {}},
+        "noprogress": True,
+    }
+    if progress_hook:
+        ydl_opts["progress_hooks"] = [progress_hook]
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(video_url, download=True)
+        path = ydl.prepare_filename(info)
+
+    if not os.path.isfile(path):
+        raise RuntimeError("Audio selesai diunduh tetapi filenya tidak ditemukan.")
+    return path
+
+
 def download_youtube_local(video_url: str, fmt: str = "720", out_dir: Optional[str] = None,
                            progress_hook=None) -> str:
     """Download a remote URL or return a local file path unchanged."""

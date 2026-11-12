@@ -234,8 +234,15 @@ def _parse_vtt(content):
 
 def transcript_from_vtt(content):
     """Ubah isi VTT menjadi segmen dan kata bertimestamp."""
-    words = _parse_vtt_words(content)
+    return transcript_from_words(_parse_vtt_words(content))
 
+
+def transcript_from_words(words):
+    """Ubah daftar kata {time, end, text} berurutan menjadi segmen dan kata.
+
+    Dipakai untuk subtitle YouTube maupun hasil pengenal suara, sehingga
+    keduanya punya bentuk yang sama.
+    """
     return {
         "segments": _segments_from_words(words),
         "words": [
@@ -253,6 +260,35 @@ def transcript_from_vtt(content):
 
 
 MAX_SUBTITLE_ATTEMPTS = 6
+
+
+class SubtitlesUnavailable(RuntimeError):
+    """Video bisa dibaca, tetapi subtitlenya tidak ada atau gagal diambil.
+
+    `video` berisi data video dari YouTube sehingga transkrip bisa dibuat
+    dengan cara lain (pengenal suara) tanpa meminta data itu lagi.
+    `reason` bernilai "none" (YouTube tidak menyediakan subtitle) atau
+    "failed" (subtitle ada tetapi gagal diunduh).
+    """
+
+    def __init__(self, message, video, reason):
+        super().__init__(message)
+        self.video = video
+        self.reason = reason
+
+
+def _video_metadata(info, video_url):
+    return {
+        "video_id": info.get("id", ""),
+        "title": info.get("title", ""),
+        "url": info.get("webpage_url") or video_url,
+        "channel": info.get("channel") or info.get("uploader") or "",
+        "width": info.get("width"),
+        "height": info.get("height"),
+        "duration": float(info.get("duration") or 0),
+        # Bahasa video menurut YouTube (bisa kosong).
+        "language": info.get("language") or "",
+    }
 _ANSI_CODES = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -456,7 +492,13 @@ def transcribe_from_youtube(
         break
 
     if parsed is None:
-        raise RuntimeError(_no_subtitle_message(info, errors))
+        manual, automatic = _listed_languages(info)
+        nothing_listed = manual is not None and not manual and not automatic
+        raise SubtitlesUnavailable(
+            _no_subtitle_message(info, errors),
+            video=_video_metadata(info, video_url),
+            reason="none" if nothing_listed or not errors else "failed",
+        )
 
     segments = parsed["segments"]
 
