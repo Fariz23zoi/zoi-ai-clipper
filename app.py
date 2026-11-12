@@ -10,6 +10,7 @@ Alur tiga halaman:
 
 Jalankan:  python app.py
 """
+import hashlib
 import json
 import os
 import re
@@ -38,7 +39,7 @@ from shorts_generator.local.downloader import (
 )
 from shorts_generator.local.transcriber_youtube import (
     PARSER_VERSION, SubtitlesUnavailable, fetch_video_metadata,
-    transcribe_from_youtube, transcript_from_vtt,
+    transcribe_from_youtube, transcript_from_vtt, transcript_from_words,
 )
 from shorts_generator.zoi_engine import analyze_transcript
 
@@ -168,8 +169,20 @@ def _public_job(jobs, job_id):
         return {key: value for key, value in job.items() if key != "created_at"}
 
 
+def _local_film(analysis):
+    """File film di laptop yang dipilih lewat halaman Klip film, bila masih ada."""
+    path = str(analysis.get("local_path") or "")
+    if path and os.path.isfile(path):
+        return os.path.realpath(path)
+    return None
+
+
 def _source_path(analysis):
     """Path video sumber di dalam folder output, atau None bila belum ada."""
+    local = _local_film(analysis)
+    if local:
+        return local
+
     names = []
 
     hinted = os.path.basename(str(analysis.get("source_file") or ""))
@@ -665,15 +678,14 @@ def _transcribe_speech(video_url, error, stage):
     }
 
 
-def _analyze_worker(job_id, video_url, mode):
+def _analyze_worker(job_id, video_url, mode, transcript=None):
     def stage(text, progress=None):
         _update_job(ANALYZE_JOBS, job_id, stage=text, progress=progress)
 
     try:
         stage("Mengambil subtitle YouTube")
 
-        guessed_id = _extract_youtube_video_id(video_url)
-        transcript = None
+        guessed_id = None if transcript else _extract_youtube_video_id(video_url)
 
         if guessed_id and exchange.is_valid_video_id(guessed_id):
             cached = exchange.load_transcript(guessed_id)
@@ -733,7 +745,11 @@ def _analyze_worker(job_id, video_url, mode):
             groups.extend(_run_api_providers(transcript, mode, notices))
 
         downloaded = {}
-        if DOWNLOAD_AT_ANALYSIS and not _source_path({"video_id": video_id}):
+        if (
+            DOWNLOAD_AT_ANALYSIS and video_url
+            and not transcript.get("local_path")
+            and not _source_path({"video_id": video_id})
+        ):
             tier = _needed_source_res(
                 QUALITIES[DEFAULT_QUALITY][0], aspect or DEFAULT_ASPECT
             )
@@ -769,6 +785,8 @@ def _analyze_worker(job_id, video_url, mode):
                 "source_res": downloaded.get(
                     "source_res", previous.get("source_res", 0)
                 ),
+                "local_path": transcript.get("local_path")
+                or previous.get("local_path", ""),
                 "updated_at": time.time(),
                 "notices": notices,
                 "groups": groups
@@ -1025,6 +1043,216 @@ def transkrip_impor():
     )
 
 
+# ------------------------------------------------- klip film dengan file .srt
+
+FILM_EXTENSIONS = (
+    ".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".ts", ".mpg", ".mpeg"
+)
+MAX_SUBTITLE_SHIFT = 600
+
+
+def _film_page(error="", status=200, **extra):
+    return render_template("film.html", error=error, form=request.form, **extra), status
+
+
+@app.route("/film")
+def film_page():
+    return _film_page()
+
+
+def _decode_subtitle(raw):
+    """Isi file subtitle sebagai teks. Banyak .srt film memakai ANSI/Windows-1252."""
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")
+    # Tag gaya ASS di dalam .srt, misalnya {\an8} atau {\i1}.
+    return re.sub(r"\{\\[^}]*\}", "", text)
+
+
+def _shift_transcript(parsed, seconds):
+    """Geser waktu subtitle; kata yang jatuh sebelum detik 0 dibuang.
+
+    Digeser per kata lalu disusun ulang menjadi potongan, supaya hanya kata
+    yang benar-benar jatuh sebelum detik 0 yang terbuang.
+    """
+    if not seconds:
+        return parsed
+
+    return transcript_from_words([
+        {"time": word["start"] + seconds, "end": word["end"] + seconds,
+         "text": word["text"]}
+        for word in parsed["words"] if word["start"] + seconds >= 0
+    ])
+
+
+def _probe_film(path):
+    """(durasi, lebar, tinggi) file video menurut ffprobe."""
+    try:
+        output = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height:format=duration",
+             "-of", "json", path],
+            capture_output=True, text=True, check=True, timeout=60
+        ).stdout
+        data = json.loads(output)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0.0, None, None
+
+    stream = (data.get("streams") or [{}])[0]
+    try:
+        duration = float((data.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0.0
+    return duration, stream.get("width"), stream.get("height")
+
+
+def _film_id(seed):
+    return "film_" + hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
+
+
+def _film_worker(job_id, video_url, local_path, mode, parsed, filename):
+    """Lengkapi transkrip film dengan data videonya, lalu analisis seperti biasa."""
+    try:
+        _update_job(
+            ANALYZE_JOBS, job_id, stage="Membaca data film", progress=None
+        )
+        last_end = max(segment["end"] for segment in parsed["segments"])
+
+        if local_path:
+            duration, width, height = _probe_film(local_path)
+            if not duration:
+                raise RuntimeError(
+                    "File film tidak bisa dibaca. Pastikan filenya video yang "
+                    "bisa diputar."
+                )
+            video = {
+                "video_id": _film_id(os.path.realpath(local_path)),
+                "title": os.path.splitext(os.path.basename(local_path))[0],
+                "url": "", "width": width, "height": height,
+                "duration": duration,
+            }
+        else:
+            youtube_id = _extract_youtube_video_id(video_url)
+            try:
+                video = fetch_video_metadata(video_url)
+            except Exception:
+                video = {"title": "", "url": video_url}
+
+            raw_id = youtube_id or str(video.get("video_id") or "")
+            clean_id = re.sub(r"[^A-Za-z0-9_-]", "_", raw_id)[:50]
+            video["video_id"] = (
+                clean_id if clean_id and exchange.is_valid_video_id(clean_id)
+                else _film_id(video_url)
+            )
+
+        video_id = video["video_id"]
+        duration = float(video.get("duration") or 0)
+
+        if duration and last_end > duration * 1.05 + 10:
+            raise RuntimeError(
+                "Subtitle di file ini lebih panjang daripada filmnya "
+                f"({exchange.format_time(last_end)} lawan "
+                f"{exchange.format_time(duration)}). Mungkin subtitle ini "
+                "untuk versi film lain."
+            )
+
+        transcript = {
+            "title": video.get("title") or video_id,
+            "video_id": video_id,
+            "url": "" if local_path else (video.get("url") or video_url),
+            "channel": video.get("channel", ""),
+            "width": video.get("width"),
+            "height": video.get("height"),
+            "duration": duration or last_end,
+            "language": "",
+            "source": "import",
+            "import_file": filename,
+            "local_path": os.path.realpath(local_path) if local_path else "",
+            "parser_version": PARSER_VERSION,
+            "segments": parsed["segments"],
+            "words": parsed["words"]
+        }
+        exchange.save_transcript(transcript)
+    except Exception as error:
+        _update_job(
+            ANALYZE_JOBS, job_id, status="error", stage="Analisis gagal",
+            error=f"Gagal memproses film: {str(error)[:600]}"
+        )
+        return
+
+    _analyze_worker(job_id, transcript["url"], mode, transcript=transcript)
+
+
+@app.route("/film/proses", methods=["POST"])
+def film_proses():
+    video_url = request.form.get("film_url", "").strip()
+    local_path = request.form.get("film_path", "").strip().strip('"').strip("'")
+    mode = request.form.get("mode", "zoi")
+    upload = request.files.get("subtitle_file")
+
+    if mode not in MODES:
+        return _film_page("Mode analisis tidak dikenal.", 400)
+
+    if bool(video_url) == bool(local_path):
+        return _film_page(
+            "Isi salah satu: link film, atau lokasi file film di laptop.", 400
+        )
+
+    if video_url and not re.match(r"^https?://\S+$", video_url):
+        return _film_page("Link film harus diawali http:// atau https://.", 400)
+
+    if local_path:
+        local_path = os.path.expanduser(local_path)
+        if not os.path.isfile(local_path):
+            return _film_page(
+                "File film tidak ditemukan di lokasi itu. Salin lokasinya "
+                "lagi (lihat petunjuk di bawah kotak).", 400
+            )
+        if not local_path.lower().endswith(FILM_EXTENSIONS):
+            return _film_page("File itu bukan file video yang dikenali.", 400)
+
+    try:
+        shift = float(request.form.get("shift", "0") or 0)
+    except ValueError:
+        return _film_page("Geser waktu harus berupa angka detik.", 400)
+    if shift != shift or abs(shift) > MAX_SUBTITLE_SHIFT:
+        return _film_page(
+            f"Geser waktu paling banyak {MAX_SUBTITLE_SHIFT} detik.", 400
+        )
+
+    if not upload or not upload.filename:
+        return _film_page("Pilih file subtitle (.srt atau .vtt).", 400)
+
+    parsed = _shift_transcript(
+        transcript_from_vtt(_decode_subtitle(
+            upload.read(app.config["MAX_CONTENT_LENGTH"])
+        )),
+        shift
+    )
+
+    if not parsed["segments"]:
+        return _film_page(
+            "File ini tidak berisi subtitle bertimestamp. Gunakan file "
+            ".srt atau .vtt.", 400
+        )
+
+    job_id = _new_job(
+        ANALYZE_JOBS, stage="Menyiapkan", progress=None, video_id="", next=""
+    )
+    threading.Thread(
+        target=_film_worker,
+        args=(job_id, video_url, local_path, mode, parsed,
+              os.path.basename(upload.filename)[:80]),
+        daemon=True
+    ).start()
+
+    return render_template(
+        "analyzing.html", job_id=job_id,
+        video_url=video_url or os.path.basename(local_path), downloads=False
+    )
+
+
 @app.route("/analyze/status/<job_id>")
 def analyze_status(job_id):
     job = _public_job(ANALYZE_JOBS, job_id)
@@ -1071,6 +1299,7 @@ def _render_video_page(analysis, status=200, **extra):
         has_ai=bool(ai_groups),
         ai_names=" dan ".join(item["name"] for item in _analysts_for(mode)),
         source_ready=source_path is not None,
+        source_is_local=source_path is not None and source_path == _local_film(analysis),
         source_mb=_size_mb(source_path),
         can_render=source_path is not None or bool(analysis.get("url")),
         qualities=_quality_options(analysis, source_path),

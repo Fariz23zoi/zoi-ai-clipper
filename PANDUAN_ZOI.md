@@ -117,6 +117,19 @@ Untuk laptop yang lambat, transkrip video tanpa subtitle bisa dibuat di Google C
 
 File `.srt` atau `.vtt` dari aplikasi transkrip lain juga bisa diimpor. GPU gratis Colab dibatasi waktu pemakaian dan kadang tidak tersedia. Notebook dibuat dari `colab/build_notebook.py`.
 
+## Klip film dengan file .srt (pilihan tambahan)
+
+Buka dari tombol **Klip film dengan file .srt** di halaman utama.
+
+1. **Filmnya**, isi salah satu:
+   - **Link film**: YouTube dan banyak situs video lain. Layanan berbayar yang dikunci (Netflix, Disney+, dan sejenisnya) tidak bisa diunduh.
+   - **Lokasi file film di laptop**: di File Explorer tahan **Shift**, klik kanan file film, pilih **Copy as path**, lalu tempel. Film dipakai langsung, tidak disalin, dan tidak pernah dihapus ZOI.
+2. **File subtitle** `.srt` atau `.vtt`. Subtitle berformat UTF-8 maupun ANSI (Windows) bisa dibaca.
+3. **Geser waktu subtitle** bila subtitle tidak pas dengan film: angka positif bila subtitle muncul terlalu cepat, negatif bila terlambat.
+4. **Pilih mode** lalu **Proses film**. Untuk film, Claude atau ChatGPT biasanya memilih momen lebih baik daripada ZOI Engine.
+
+Tidak ada pengenalan suara, jadi prosesnya cepat. Subtitle yang jauh lebih panjang daripada filmnya ditolak, karena kemungkinan untuk versi film lain. Pastikan Anda berhak memakai potongan film itu.
+
 ## Supaya ringan di HP
 
 - **Pilih kualitas render yang lebih rendah** bila HP terasa berat. 480p jauh lebih cepat daripada 720p atau 1080p.

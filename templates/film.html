@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Klip film - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card">
+  <p class="step">Pilihan tambahan &middot; Film</p>
+  <h1>Klip film dengan file .srt</h1>
+  <p class="muted" style="margin:0">ZOI memakai subtitle film untuk mencari momen terbaik, lalu memotongnya menjadi Shorts 9:16.
+    Tidak ada pengenalan suara, jadi prosesnya cepat.</p>
+</section>
+
+{% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+
+<form class="card" method="POST" action="{{ url_for('film_proses') }}" enctype="multipart/form-data">
+  <h2>1. Filmnya</h2>
+  <p class="muted">Isi salah satu.</p>
+
+  <label class="field" for="film_url">Link film</label>
+  <input type="url" id="film_url" name="film_url" inputmode="url" autocomplete="off"
+         placeholder="https://..." value="{{ form.get('film_url', '') }}">
+  <p class="muted" style="margin:6px 0 0">YouTube dan banyak situs video lain. Layanan berbayar yang dikunci (Netflix, Disney+, dan sejenisnya) tidak bisa diunduh.</p>
+
+  <label class="field" for="film_path" style="margin-top:14px">Atau lokasi file film di laptop</label>
+  <input type="text" id="film_path" name="film_path" autocomplete="off" spellcheck="false"
+         placeholder="C:\Users\Nama\Videos\film.mp4" value="{{ form.get('film_path', '') }}">
+  <p class="muted" style="margin:6px 0 0">Di File Explorer, tahan <strong>Shift</strong>, klik kanan file filmnya, pilih
+    <strong>Copy as path</strong>, lalu tempel di sini. Filmnya tidak disalin, jadi tidak memakan ruang tambahan.</p>
+
+  <h2 style="margin-top:18px">2. Subtitlenya</h2>
+  <label class="field" for="subtitle_file">File subtitle (.srt atau .vtt)</label>
+  <input type="file" id="subtitle_file" name="subtitle_file" accept=".srt,.vtt,text/plain" required>
+
+  <label class="field" for="shift" style="margin-top:12px">Geser waktu subtitle (detik)</label>
+  <input type="number" id="shift" name="shift" step="0.1" value="{{ form.get('shift', '0') }}"
+         style="width:100%;padding:13px 12px;border-radius:10px;border:1px solid var(--line);background:#0f1017;color:var(--text);font:inherit">
+  <p class="muted" style="margin:6px 0 0">Biarkan 0. Isi hanya bila subtitle tidak pas dengan film:
+    angka positif bila subtitle muncul terlalu cepat, negatif bila terlambat.</p>
+
+  <fieldset class="modes" style="margin-top:16px">
+    <legend>3. Mode analisis</legend>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="zoi" {% if form.get('mode', 'zoi') == 'zoi' %}checked{% endif %}>
+      <span class="body"><strong>ZOI</strong><small>Analisis lokal, langsung ke daftar klip</small></span></label>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="claude" {% if form.get('mode') == 'claude' %}checked{% endif %}>
+      <span class="body"><strong>Claude</strong><small>Salin prompt ke Claude, tempel jawabannya</small></span></label>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="chatgpt" {% if form.get('mode') == 'chatgpt' %}checked{% endif %}>
+      <span class="body"><strong>ChatGPT</strong><small>Salin prompt ke ChatGPT, tempel jawabannya</small></span></label>
+    <label class="mode"><input class="sr-only" type="radio" name="mode" value="hybrid" {% if form.get('mode') == 'hybrid' %}checked{% endif %}>
+      <span class="body"><strong>Hybrid</strong><small>Claude dan ChatGPT sekaligus</small></span></label>
+  </fieldset>
+  <p class="muted" style="margin:10px 0 0">Untuk film, Claude atau ChatGPT biasanya memilih momen lebih baik daripada ZOI Engine,
+    karena ZOI Engine dibuat untuk obrolan berbahasa Indonesia.</p>
+
+  <button class="btn" type="submit" style="margin-top:14px">Proses film</button>
+</form>
+
+<p class="muted" style="margin-top:12px">Pastikan Anda berhak memakai potongan film itu. Mengunggah klip film milik orang lain bisa melanggar hak cipta.</p>
+
+<a class="btn secondary" style="margin-top:14px" href="{{ url_for('home') }}">Kembali ke halaman utama</a>
+{% endblock %}

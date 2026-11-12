@@ -45,6 +45,12 @@
   <a class="btn secondary" href="{{ url_for('transkrip_page') }}">Transkrip lewat Google Colab</a>
 </section>
 
+<section class="card">
+  <h2>Klip film</h2>
+  <p class="muted">Punya film dan file subtitle .srt? Tempel link film atau pilih file di laptop, lalu ZOI mencari momen terbaiknya.</p>
+  <a class="btn secondary" href="{{ url_for('film_page') }}">Klip film dengan file .srt</a>
+</section>
+
 {% if videos %}
 <section class="card">
   <h2>Video yang sudah dianalisis</h2>

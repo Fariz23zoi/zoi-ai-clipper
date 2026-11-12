@@ -10,7 +10,9 @@
     {% if video.language %}<span class="chip">Subtitle {{ video.language }}</span>{% endif %}
     <span class="chip">Mode {{ video.mode|upper }}</span>
   </div>
-  {% if source_ready %}
+  {% if source_is_local %}
+  <p class="small" style="margin:10px 0 0;overflow-wrap:anywhere">Memakai file film di laptop: {{ video.local_path }} ({{ source_mb }} MB).</p>
+  {% elif source_ready %}
   <div class="source">
     <span class="small">Video sumber tersimpan di HP ({{ source_mb }} MB).</span>
     <form method="POST" action="{{ url_for('delete_source', video_id=video.video_id) }}"
