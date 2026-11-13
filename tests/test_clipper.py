@@ -251,6 +251,119 @@ class SquareFrameTest(unittest.TestCase):
                                     os.path.join(self.folder, "x.mp4"), frame="bulat")
 
 
+class HookLayoutTest(unittest.TestCase):
+    def test_markers_emoji_and_spaces_are_cleaned(self):
+        self.assertEqual(
+            clipper.clean_hook_text("  Lucu [tertawa]  banget 😂\n ya  "),
+            "Lucu banget ya",
+        )
+
+    def test_short_text_uses_the_largest_font(self):
+        size, lines = clipper.layout_hook("Kenapa harganya mahal?", 720)
+        self.assertEqual(lines, ["Kenapa harganya mahal?"])
+        self.assertEqual(size, int(720 * 0.062))
+
+    def test_long_text_wraps_shrinks_and_is_cut_to_three_lines(self):
+        text = "kata " * 60
+        size, lines = clipper.layout_hook(text, 720)
+        self.assertLessEqual(len(lines), clipper.HOOK_MAX_LINES)
+        self.assertLess(size, int(720 * 0.062))
+        self.assertTrue(lines[-1].endswith("..."))
+
+    def test_empty_text_gives_no_lines(self):
+        self.assertEqual(clipper.layout_hook("  [musik]  ", 720), (0, []))
+
+    def test_crop_position_expression(self):
+        left = clipper._foreground_filter(720, 1280, "square", 0.0)
+        right = clipper._foreground_filter(720, 1280, "square", 1.0)
+        clamped = clipper._foreground_filter(720, 1280, "square", 7)
+        self.assertIn("*0.000", left)
+        self.assertIn("*1.000", right)
+        self.assertIn("*1.000", clamped)
+
+
+@unittest.skipUnless(ffmpeg_available() and clipper.find_hook_font(), "FFmpeg atau font tidak tersedia")
+class HookRenderTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.mkdtemp()
+        cls.source = make_test_video(os.path.join(cls.folder, "src.mp4"), seconds=6, size="1280x720")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.folder, ignore_errors=True)
+
+    def top_area(self, path):
+        import subprocess
+        # Bagian atas kanvas diperkecil jadi 36 x 20 piksel abu-abu.
+        return subprocess.run(
+            ["ffmpeg", "-v", "error", "-ss", "2", "-i", path, "-frames:v", "1",
+             "-vf", "crop=iw:ih*0.3:0:0,scale=36:20,format=gray", "-f", "rawvideo", "-"],
+            capture_output=True, check=True,
+        ).stdout
+
+    def test_hook_block_is_drawn_in_the_top_area(self):
+        plain = os.path.join(self.folder, "polos.mp4")
+        hooked = os.path.join(self.folder, "hook.mp4")
+        clipper.crop_clip_local(self.source, 1, 4, "9:16", plain, size=(360, 640))
+        clipper.crop_clip_local(
+            self.source, 1, 4, "9:16", hooked, size=(360, 640),
+            hook_text="Harga 100%: \"mahal\" banget, 'kan? C:\\folder {x} [tertawa] 😂",
+        )
+        self.assertEqual(probe(hooked)["video"]["width"], 360)
+        self.assertIn("audio", probe(hooked))
+
+        before, after = self.top_area(plain), self.top_area(hooked)
+        changed = sum(1 for a, b in zip(before, after) if abs(a - b) > 40)
+        # Kotak dan teks hook mengubah banyak piksel di bagian atas...
+        self.assertGreater(changed, 60)
+
+        # ...tetapi tidak menyentuh bagian bawah video.
+        def bottom(path):
+            import subprocess
+            return subprocess.run(
+                ["ffmpeg", "-v", "error", "-ss", "2", "-i", path, "-frames:v", "1",
+                 "-vf", "crop=iw:ih*0.25:0:ih*0.75,scale=36:16,format=gray", "-f", "rawvideo", "-"],
+                capture_output=True, check=True,
+            ).stdout
+        diff = sum(1 for a, b in zip(bottom(plain), bottom(hooked)) if abs(a - b) > 40)
+        self.assertLess(diff, 5)
+
+    def test_hook_with_square_frame_and_crop_position(self):
+        target = os.path.join(self.folder, "persegi_hook.mp4")
+        clipper.crop_clip_local(
+            self.source, 1, 4, "9:16", target, size=(480, 854), frame="square",
+            crop_x=0.2, hook_text="Ternyata ini rahasianya",
+        )
+        video = probe(target)["video"]
+        self.assertEqual((video["width"], video["height"]), (480, 854))
+
+    def test_temporary_files_are_removed(self):
+        before = {n for n in os.listdir(tempfile.gettempdir()) if n.startswith("zoi_hook_")}
+        clipper.crop_clip_local(
+            self.source, 1, 3, "9:16", os.path.join(self.folder, "bersih.mp4"),
+            size=(240, 426), hook_text="Tes",
+        )
+        after = {n for n in os.listdir(tempfile.gettempdir()) if n.startswith("zoi_hook_")}
+        self.assertEqual(after - before, set())
+
+    def test_missing_font_is_explained(self):
+        saved = (clipper._HOOK_FONTS, os.environ.get("ZOI_HOOK_FONT"))
+        clipper._HOOK_FONTS = ()
+        os.environ.pop("ZOI_HOOK_FONT", None)
+        try:
+            with self.assertRaises(RuntimeError) as caught:
+                clipper.crop_clip_local(
+                    self.source, 1, 3, "9:16", os.path.join(self.folder, "tanpa_font.mp4"),
+                    size=(240, 426), hook_text="Tes",
+                )
+            self.assertIn("Font untuk blok hook", str(caught.exception))
+        finally:
+            clipper._HOOK_FONTS = saved[0]
+            if saved[1] is not None:
+                os.environ["ZOI_HOOK_FONT"] = saved[1]
+
+
 class PriorityTest(unittest.TestCase):
     def test_ffmpeg_runs_at_low_priority_when_nice_exists(self):
         command = clipper._with_low_priority(["ffmpeg", "-y"])

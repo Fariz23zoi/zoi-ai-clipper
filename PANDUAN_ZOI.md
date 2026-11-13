@@ -137,7 +137,18 @@ Di halaman 3, di bawah **Kualitas render**, ada pilihan **Bingkai video**:
 - **16:9 penuh** (bawaan): seluruh gambar asli tampil di tengah, latar blur di atas dan bawah.
 - **1:1 persegi**: bagian tengah gambar dipotong persegi, jadi orang di tengah tampil lebih besar. Bagian kiri dan kanan gambar terpotong. Latar blur tetap ada.
 
+Saat **1:1 persegi** dipilih, muncul penggeser **Posisi potongan 1:1** (Kiri sampai Kanan) untuk orang yang tidak duduk di tengah. Setelah video sumber terunduh, ada gambar pratinjau dengan kotak terang yang menunjukkan bagian yang tampil di klip. Posisi ini diingat untuk tiap video.
+
 Bingkai 1:1 butuh video sumber yang lebih tajam (misalnya 720p untuk render 720p), jadi kadang ZOI mengunduh ulang sumbernya. Pilihan terakhir diingat browser. Nama file hasil bingkai 1:1 mengandung `_1x1`.
+
+## Blok hook
+
+Di halaman 3 ada sakelar **Blok hook** (Aktif/Mati). Bila aktif, teks hook tampil di bagian atas video dalam kotak gelap, maksimal 3 baris (ukuran huruf mengecil otomatis untuk teks panjang).
+
+- Tiap klip punya kotak **Teks blok hook** yang terisi otomatis dari hook hasil analisis. Edit teksnya sesuka Anda sebelum menekan **Render klip ini**.
+- Tanda seperti `[tertawa]` dan emoji dibuang otomatis, karena font biasa tidak punya gambar emoji. Maksimal 150 karakter.
+- Kosongkan kotaknya bila satu klip tidak perlu blok hook.
+- Font yang dipakai: Arial Bold di Windows, DejaVu Sans Bold di Linux, Roboto di Android. Font lain bisa dipilih lewat `ZOI_HOOK_FONT`.
 
 ## Supaya ringan di HP
 
@@ -223,6 +234,7 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_PORT` | `5000` | Port dashboard |
 | `ZOI_RENDER_PRESET` | `veryfast` | `ultrafast` lebih cepat, file lebih besar |
 | `ZOI_RENDER_CRF` | `23` | Lebih kecil = kualitas lebih tinggi |
+| `ZOI_HOOK_FONT` | otomatis | Lokasi file font `.ttf` untuk blok hook |
 | `ZOI_RENDER_MAX_FPS` | `30` | Batas fps hasil render; `0` = ikut sumber |
 | `ZOI_RENDER_NICE` | `10` | Prioritas FFmpeg (0-19); `0` = prioritas normal |
 | `ZOI_RENDER_QUALITY` | `720` | Kualitas render bawaan: `240`, `360`, `480`, `720`, atau `1080` |

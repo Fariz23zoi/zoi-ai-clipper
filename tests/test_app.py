@@ -690,6 +690,66 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual((video["width"], video["height"]), (480, 854))
         self.assertEqual(self.downloads, [])
 
+    def test_47b_hook_editor_and_crop_controls_on_page(self):
+        html = self.page()
+        self.assertIn('name="hook-choice" value="1" checked', html)
+        self.assertEqual(html.count('name="hook_text"'), html.count("Render klip ini"))
+        self.assertEqual(html.count('class="hook-field"'), html.count("Render klip ini"))
+        self.assertEqual(html.count('class="crop-field"'), html.count("Render klip ini"))
+        self.assertIn('id="crop-x"', html)
+        # Teks awal = hook hasil analisis tanpa tanda seperti [tertawa].
+        analysis = exchange.load_analysis(VIDEO_ID)
+        clip = next(c for g in analysis["groups"] for c in g["clips"] if c["hook_sentence"])
+        self.assertIn(zoi_app.clean_hook_text(clip["hook_sentence"])[:30], html)
+
+    def test_47c_preview_image(self):
+        response = self.client.get(f"/video/{VIDEO_ID}/preview.jpg?t=2")
+        if not ffmpeg_available():
+            return
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "image/jpeg")
+        self.assertGreater(len(response.data), 1000)
+        self.assertEqual(self.client.get("/video/tidakada/preview.jpg").status_code, 404)
+
+    def test_47d_bad_crop_position_is_refused(self):
+        for value in ("abc", "nan"):
+            response = self.client.post("/select", data={
+                "video_id": VIDEO_ID, "start_time": "3", "end_time": "13", "crop_x": value,
+            })
+            self.assertEqual(response.status_code, 400, value)
+
+    @NEEDS_FFMPEG
+    def test_47e_render_with_hook_and_crop(self):
+        if not zoi_app.crop_clip_local.__module__:
+            return
+        from shorts_generator.local.clipper import find_hook_font
+        if not find_hook_font():
+            self.skipTest("font tidak tersedia")
+        job_id, html = self.render(
+            quality="240", frame="square", crop_x="20", hook_on="1",
+            hook_text="Ternyata [tertawa] ini rahasianya 😂", end_time="9",
+        )
+        self.assertIn("Blok hook", html)
+        self.assertIn("kiri 20%", html)
+        data, _ = self.wait(f"/progress/{job_id}")
+        self.assertEqual(data["status"], "done", data)
+        video = probe(os.path.join(self.folder, data["filename"]))["video"]
+        self.assertEqual((video["width"], video["height"]), (240, 426))
+
+    def test_47f_hook_off_or_empty_means_no_hook(self):
+        captured = []
+        original = zoi_app.crop_clip_local
+        zoi_app.crop_clip_local = lambda *a, **k: captured.append(k) or open(a[4], "wb").close()
+        try:
+            for form in ({"hook_on": "0", "hook_text": "teks"}, {"hook_on": "1", "hook_text": " [musik] "}):
+                job_id, html = self.render(**form)
+                self.wait(f"/progress/{job_id}")
+                self.assertNotIn("Blok hook</span>", html)
+        finally:
+            zoi_app.crop_clip_local = original
+        self.assertEqual([k["hook_text"] for k in captured], [None, None])
+        self.assertEqual([k["crop_x"] for k in captured], [0.5, 0.5])
+
     def test_48_square_frame_rule(self):
         for quality, tier in (("240", 240), ("480", 480), ("720", 720), ("1080", 1080)):
             width = zoi_app.QUALITIES[quality][0]

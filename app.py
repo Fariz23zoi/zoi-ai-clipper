@@ -33,7 +33,7 @@ from shorts_generator.config import (
     CLAUDE_API_KEY, LOCAL_OUTPUT_DIR, OPENAI_API_KEY,
 )
 from shorts_generator.local.clipper import (
-    RENDER_FRAMES, RENDER_SIZES, crop_clip_local,
+    RENDER_FRAMES, RENDER_SIZES, clean_hook_text, crop_clip_local,
 )
 from shorts_generator.local import speech_to_text
 from shorts_generator.local.downloader import (
@@ -129,6 +129,12 @@ _RENDER_SLOT = threading.Semaphore(1)
 
 
 # ------------------------------------------------------------------ utilitas
+
+@app.template_filter("hook_default")
+def hook_default(clip):
+    """Teks awal blok hook: kalimat hook hasil analisis, atau judul klip."""
+    return clean_hook_text(clip.get("hook_sentence") or clip.get("title") or "")
+
 
 @app.template_filter("hms")
 def hms(seconds):
@@ -1370,6 +1376,36 @@ def ai_page(video_id):
     return _render_ai_page(_load_video(video_id))
 
 
+@app.route("/video/<video_id>/preview.jpg")
+def video_preview(video_id):
+    """Satu gambar dari video sumber, untuk memilih posisi potong 1:1."""
+    analysis = _load_video(video_id)
+    source = _source_path(analysis)
+    if not source:
+        abort(404)
+
+    try:
+        at = float(request.args.get("t", "") or 0)
+    except ValueError:
+        at = 0.0
+    if at <= 0:
+        at = float(analysis.get("duration") or 0) / 3
+
+    try:
+        image = subprocess.run(
+            ["ffmpeg", "-v", "error", "-ss", f"{max(0.0, at):.2f}", "-i", source,
+             "-frames:v", "1", "-vf", "scale=480:-2", "-f", "image2",
+             "-c:v", "mjpeg", "-q:v", "5", "-"],
+            capture_output=True, check=True, timeout=60
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        abort(404)
+
+    if not image:
+        abort(404)
+    return Response(image, mimetype="image/jpeg")
+
+
 @app.route("/video/<video_id>/export.json")
 def export_json(video_id):
     _load_video(video_id)
@@ -1584,6 +1620,18 @@ def select():
     if frame not in RENDER_FRAMES:
         return "Bingkai tidak dikenal.", 400
 
+    try:
+        crop_x = float(request.form.get("crop_x", "50") or 50)
+    except ValueError:
+        return "Posisi potong tidak valid.", 400
+    if crop_x != crop_x:
+        return "Posisi potong tidak valid.", 400
+    crop_x = max(0.0, min(100.0, crop_x))
+
+    hook_text = ""
+    if request.form.get("hook_on") == "1":
+        hook_text = clean_hook_text(request.form.get("hook_text", ""))
+
     size = QUALITIES[quality]
     needed = _needed_source_res_for(size[0], _aspect(analysis), frame)
 
@@ -1659,7 +1707,8 @@ def select():
 
                 crop_clip_local(
                     source_path, start, end, "9:16", output_path,
-                    progress_callback=update_progress, size=size, frame=frame
+                    progress_callback=update_progress, size=size, frame=frame,
+                    crop_x=crop_x / 100, hook_text=hook_text or None
                 )
 
                 # 100% hanya setelah file akhir benar-benar ada.
@@ -1686,7 +1735,8 @@ def select():
         "render.html",
         title=title, analyst=analyst, duration=round(end - start, 1),
         start=start, end=end, job_id=job_id, video=analysis,
-        quality=quality, size=f"{size[0]}x{size[1]}", frame=frame
+        quality=quality, size=f"{size[0]}x{size[1]}", frame=frame,
+        crop_x=crop_x, hook_text=hook_text
     )
 
 

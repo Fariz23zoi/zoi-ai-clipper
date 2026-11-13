@@ -106,7 +106,8 @@ def _with_low_priority(command):
 
 
 
-def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="Memproses"):
+def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="Memproses",
+                         cwd=None):
     """Jalankan FFmpeg dan laporkan progres nyata dari -progress pipe:1."""
     import tempfile
 
@@ -119,7 +120,7 @@ def _run_ffmpeg_progress(cmd, duration, callback=None, base=0, span=100, stage="
         proc = subprocess.Popen(
             _with_low_priority(command), stdout=subprocess.PIPE,
             stderr=errors, stdin=subprocess.DEVNULL, text=True, bufsize=1,
-            encoding="utf-8", errors="replace"
+            encoding="utf-8", errors="replace", cwd=cwd
         )
         try:
             for line in proc.stdout:
@@ -295,21 +296,155 @@ def _has_opencv() -> bool:
     return True
 
 
-def _foreground_filter(width: int, height: int, frame: str) -> str:
-    """Filter FFmpeg untuk video di tengah kanvas."""
+def _foreground_filter(width: int, height: int, frame: str,
+                       crop_x: float = 0.5) -> str:
+    """Filter FFmpeg untuk video di tengah kanvas.
+
+    `crop_x` (0 = kiri, 0.5 = tengah, 1 = kanan) menentukan bagian mana
+    yang diambil pada bingkai persegi.
+    """
     if frame == "square":
-        # Potong persegi dari tengah frame, selebar kanvas.
+        position = max(0.0, min(1.0, float(crop_x)))
         return (
-            "[fg]crop='min(iw,ih)':'min(iw,ih)',"
+            "[fg]crop='min(iw,ih)':'min(iw,ih)':"
+            f"'(iw-min(iw,ih))*{position:.3f}':'(ih-min(iw,ih))/2',"
             f"scale={width}:{width}[fg];"
         )
     return f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
 
 
+# ------------------------------------------------------------- blok hook
+
+HOOK_MAX_CHARS = 150
+HOOK_MAX_LINES = 3
+
+_HOOK_FONTS = (
+    "C:/Windows/Fonts/arialbd.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/system/fonts/Roboto-Bold.ttf",
+    "/system/fonts/Roboto-Regular.ttf",
+)
+
+
+def find_hook_font() -> Optional[str]:
+    """File font tebal untuk teks hook; ZOI_HOOK_FONT bisa menunjuk font lain."""
+    custom = os.getenv("ZOI_HOOK_FONT", "").strip()
+    for path in ((custom,) if custom else ()) + _HOOK_FONTS:
+        if path and os.path.isfile(path):
+            return path
+    return None
+
+
+def clean_hook_text(text) -> str:
+    """Rapikan teks hook: buang [tertawa] dan sejenisnya, emoji, spasi berlebih."""
+    import re
+
+    text = re.sub(r"\[[^\]]*\]", " ", str(text or ""))
+    # Emoji dan simbol di luar BMP tidak ada di font biasa.
+    text = "".join(ch for ch in text if ord(ch) <= 0xFFFF and (ch.isprintable() or ch == " "))
+    return re.sub(r"\s+", " ", text).strip()[:HOOK_MAX_CHARS]
+
+
+def layout_hook(text: str, width: int):
+    """Bagi teks hook menjadi paling banyak 3 baris yang muat di kanvas.
+
+    Mengembalikan (ukuran_font, daftar_baris). Font diperkecil bila teks
+    terlalu panjang; sisa yang tetap tidak muat diganti "...".
+    """
+    import textwrap
+
+    text = clean_hook_text(text)
+    if not text:
+        return 0, []
+
+    for scale in (0.062, 0.054, 0.047):
+        size = max(12, int(width * scale))
+        per_line = max(8, int(width * 0.84 / (size * 0.56)))
+        lines = textwrap.wrap(text, width=per_line, break_long_words=True)
+        if len(lines) <= HOOK_MAX_LINES:
+            return size, lines
+
+    lines = lines[:HOOK_MAX_LINES]
+    lines[-1] = lines[-1][: max(1, per_line - 3)].rstrip() + "..."
+    return size, lines
+
+
+def _probe_aspect(path: str) -> float:
+    """Rasio lebar/tinggi video; 16:9 bila tidak terbaca."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", path],
+            capture_output=True, text=True, check=True, timeout=60
+        ).stdout.strip().split(",")
+        width, height = int(out[0]), int(out[1])
+        if width > 0 and height > 0:
+            return width / height
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        pass
+    return 16 / 9
+
+
+def _hook_filters(text: str, width: int, height: int, frame: str,
+                  aspect: float, work_dir: str) -> str:
+    """Filter drawtext untuk blok hook di area atas kanvas.
+
+    Font dan teks disalin ke folder kerja lalu dipanggil dengan nama
+    pendek, supaya tidak ada masalah tanda khusus pada path Windows
+    maupun pada isi teks (titik dua, kutip, persen).
+    """
+    import shutil
+
+    size, lines = layout_hook(text, width)
+    if not lines:
+        return ""
+
+    font = find_hook_font()
+    if not font:
+        raise RuntimeError(
+            "Font untuk blok hook tidak ditemukan. Matikan blok hook, atau "
+            "isi ZOI_HOOK_FONT dengan lokasi file font .ttf."
+        )
+    shutil.copyfile(font, os.path.join(work_dir, "hookfont.ttf"))
+
+    picture = width if frame == "square" else min(height, width / max(aspect, 0.1))
+    top_space = (height - picture) / 2
+    line_step = int(size * 1.55)
+    block = line_step * len(lines)
+    pad = int(size * 0.32)
+
+    if top_space >= block + pad * 2:
+        first_y = int((top_space - block) / 2) + pad
+    else:
+        first_y = int(height * 0.06)
+
+    filters = []
+    for index, line in enumerate(lines):
+        name = f"hook{index}.txt"
+        with open(os.path.join(work_dir, name), "w", encoding="utf-8") as file:
+            file.write(line)
+        filters.append(
+            "drawtext=fontfile=hookfont.ttf:textfile=" + name
+            + ":expansion=none"
+            + f":fontsize={size}:fontcolor=white"
+            + f":box=1:boxcolor=black@0.62:boxborderw={pad}"
+            + f":x=(w-text_w)/2:y={first_y + index * line_step}"
+        )
+    return "," + ",".join(filters)
+
+
 def _render_vertical_single_pass(source_path: str, start: float, end: float,
                                  out_path: str, progress_callback=None,
                                  size: Optional[Tuple[int, int]] = None,
-                                 frame: str = "wide") -> str:
+                                 frame: str = "wide", crop_x: float = 0.5,
+                                 hook_text: Optional[str] = None) -> str:
     """Potong dan ubah ke 9:16 dalam satu kali encode (tanpa OpenCV).
 
     Seluruh frame asli tetap terlihat di tengah; ruang kosong diisi
@@ -317,15 +452,39 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
     diperbesar ke ukuran kanvas: latar blur tidak punya detail, jadi
     tampilannya sama untuk semua ukuran dan bebannya tetap kecil.
     """
+    import tempfile
+
     width, height = size or DEFAULT_RENDER_SIZE
     duration = max(0.1, end - start)
-    filter_complex = (
-        f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
-        "[bg]scale=180:320:force_original_aspect_ratio=increase,"
-        f"crop=180:320,boxblur=6:3,scale={width}:{height}[bg];"
-        + _foreground_filter(width, height, frame)
-        + "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
-    )
+    work_dir = tempfile.mkdtemp(prefix="zoi_hook_")
+
+    try:
+        hook = ""
+        if hook_text and clean_hook_text(hook_text):
+            hook = _hook_filters(
+                hook_text, width, height, frame,
+                _probe_aspect(source_path), work_dir
+            )
+
+        filter_complex = (
+            f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
+            "[bg]scale=180:320:force_original_aspect_ratio=increase,"
+            f"crop=180:320,boxblur=6:3,scale={width}:{height}[bg];"
+            + _foreground_filter(width, height, frame, crop_x)
+            + "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1" + hook + "[v]"
+        )
+        _encode_vertical(
+            source_path, start, duration, filter_complex, out_path,
+            progress_callback, width, height, work_dir
+        )
+    finally:
+        import shutil
+        shutil.rmtree(work_dir, ignore_errors=True)
+    return out_path
+
+
+def _encode_vertical(source_path, start, duration, filter_complex, out_path,
+                     progress_callback, width, height, work_dir):
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
         "-ss", f"{start:.3f}", "-i", source_path,
@@ -340,9 +499,9 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
     ]
     _run_ffmpeg_progress(
         cmd, duration, progress_callback,
-        5, 90, f"Memotong + reframing 9:16 ({width}x{height})"
+        5, 90, f"Memotong + reframing 9:16 ({width}x{height})",
+        cwd=work_dir
     )
-    return out_path
 
 
 def crop_clip_local(
@@ -354,6 +513,8 @@ def crop_clip_local(
     progress_callback=None,
     size: Optional[Tuple[int, int]] = None,
     frame: str = "wide",
+    crop_x: float = 0.5,
+    hook_text: Optional[str] = None,
 ) -> str:
     """Cut + reframe one highlight and report rendering progress.
 
@@ -364,6 +525,9 @@ def crop_clip_local(
     berukuran itu dengan latar blur. Tanpa `size`, perilaku lama berlaku
     (pelacakan wajah bila OpenCV terpasang, selain itu latar blur 720x1280).
     """
+    # FFmpeg dijalankan dari folder kerja sementara, jadi pakai path absolut.
+    source_path = os.path.abspath(source_path)
+    out_path = os.path.abspath(out_path)
     stem, ext = os.path.splitext(out_path)
     work_path = f"{stem}.part{ext or '.mp4'}"
     cut_path = f"{stem}.cut{ext or '.mp4'}"
@@ -374,12 +538,13 @@ def crop_clip_local(
         if frame not in RENDER_FRAMES:
             raise ValueError(f"Bingkai tidak dikenal: {frame}")
 
-        if size or frame != "wide" or (
+        if size or frame != "wide" or hook_text or (
             _ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv()
         ):
             _render_vertical_single_pass(
                 source_path, start_time, end_time, work_path,
-                progress_callback=progress_callback, size=size, frame=frame
+                progress_callback=progress_callback, size=size, frame=frame,
+                crop_x=crop_x, hook_text=hook_text
             )
         else:
             _cut_subclip(

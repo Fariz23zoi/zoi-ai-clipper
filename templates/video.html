@@ -63,7 +63,31 @@
       <label><input class="sr-only" type="radio" name="frame-choice" value="square"><span>1:1 persegi</span></label>
     </div>
   </fieldset>
-  <p class="muted" style="margin:8px 0 0">16:9 menampilkan seluruh gambar. 1:1 memotong bagian tengah gambar sehingga orangnya tampil lebih besar.</p>
+  <p class="muted" style="margin:8px 0 0">16:9 menampilkan seluruh gambar. 1:1 memotong sebagian gambar sehingga orangnya tampil lebih besar.</p>
+
+  <div id="crop-panel" hidden>
+    <label class="field" for="crop-x" style="margin-top:12px">Posisi potongan 1:1</label>
+    <input type="range" id="crop-x" min="0" max="100" step="5" value="50">
+    <div class="range-labels"><span>Kiri</span><span id="crop-value">Tengah</span><span>Kanan</span></div>
+    {% if source_ready %}
+    <div class="crop-preview" id="crop-preview">
+      <img src="{{ url_for('video_preview', video_id=video.video_id) }}" alt="Pratinjau bagian video yang dipakai" id="crop-image">
+      <div class="crop-box" id="crop-box"></div>
+    </div>
+    <p class="muted" style="margin:6px 0 0">Kotak terang = bagian yang tampil di klip.</p>
+    {% else %}
+    <p class="muted" style="margin:6px 0 0">Pratinjau muncul setelah video sumber terunduh (setelah render pertama).</p>
+    {% endif %}
+  </div>
+
+  <fieldset class="plain" style="margin-top:14px">
+    <legend>Blok hook</legend>
+    <div class="seg" style="grid-template-columns:1fr 1fr">
+      <label><input class="sr-only" type="radio" name="hook-choice" value="1" checked><span>Aktif</span></label>
+      <label><input class="sr-only" type="radio" name="hook-choice" value="0"><span>Mati</span></label>
+    </div>
+  </fieldset>
+  <p class="muted" style="margin:8px 0 0">Teks hook tampil di bagian atas video. Teksnya terisi otomatis dari hasil analisis dan bisa diedit di tiap klip sebelum dirender.</p>
   <p class="muted" id="quality-note" style="margin:10px 0 0">Hasil {{ chosen.size }}.
     {% if chosen.ready %}Video sumber sudah tersimpan, jadi render langsung jalan.
     {% elif source_ready %}Video sumber diunduh ulang pada kualitas {{ chosen.source }}p saat render.
@@ -103,7 +127,14 @@
       <input type="hidden" name="end_time" value="{{ clip.end_time }}">
       <input type="hidden" name="quality" value="{{ default_quality }}" class="quality-field">
       <input type="hidden" name="frame" value="wide" class="frame-field">
-      <button class="btn" type="submit" {% if not can_render %}disabled{% endif %}>Render klip ini</button>
+      <input type="hidden" name="crop_x" value="50" class="crop-field">
+      <input type="hidden" name="hook_on" value="1" class="hook-field">
+      <div class="hook-edit">
+        <label class="field" for="hook-{{ group.name|replace(' ', '')|replace('(', '')|replace(')', '')|replace('.', '') }}-{{ loop.index }}">Teks blok hook</label>
+        <textarea id="hook-{{ group.name|replace(' ', '')|replace('(', '')|replace(')', '')|replace('.', '') }}-{{ loop.index }}" name="hook_text" maxlength="150"
+                  spellcheck="false">{{ clip|hook_default }}</textarea>
+      </div>
+      <button class="btn" type="submit" style="margin-top:10px" {% if not can_render %}disabled{% endif %}>Render klip ini</button>
     </form>
   </article>
   {% endfor %}
@@ -222,6 +253,59 @@
   });
 
   apply();
+
+  // ---- posisi potongan 1:1
+  var cropPanel = document.getElementById("crop-panel");
+  var cropInput = document.getElementById("crop-x");
+  var cropValue = document.getElementById("crop-value");
+  var cropBox = document.getElementById("crop-box");
+  var cropImage = document.getElementById("crop-image");
+  var cropFields = document.querySelectorAll(".crop-field");
+  var CROP_KEY = "zoi-posisi-potong-{{ video.video_id }}";
+
+  function drawCrop() {
+    var value = Number(cropInput.value);
+    cropFields.forEach(function (field) { field.value = value; });
+    cropValue.textContent = value === 50 ? "Tengah" : (value < 50 ? "Kiri " : "Kanan ") + value + "%";
+    if (cropBox && cropImage && cropImage.naturalWidth) {
+      var w = cropImage.naturalWidth, h = cropImage.naturalHeight;
+      var side = Math.min(w, h) / w * 100;
+      cropBox.style.width = side + "%";
+      cropBox.style.left = ((100 - side) * value / 100) + "%";
+    }
+  }
+
+  function showCropPanel() { cropPanel.hidden = currentFrame() !== "square"; drawCrop(); }
+
+  var savedCrop = recall(CROP_KEY);
+  if (savedCrop !== null) { cropInput.value = savedCrop; }
+  cropInput.addEventListener("input", function () { drawCrop(); remember(CROP_KEY, cropInput.value); });
+  if (cropImage) {
+    cropImage.addEventListener("load", drawCrop);
+    cropImage.addEventListener("error", function () { document.getElementById("crop-preview").hidden = true; });
+  }
+  frames.forEach(function (radio) { radio.addEventListener("change", showCropPanel); });
+  showCropPanel();
+
+  // ---- blok hook
+  var hookChoices = document.querySelectorAll('input[name="hook-choice"]');
+  var hookFields = document.querySelectorAll(".hook-field");
+  var hookEditors = document.querySelectorAll(".hook-edit");
+  var HOOK_KEY = "zoi-blok-hook";
+
+  function applyHook() {
+    var checked = document.querySelector('input[name="hook-choice"]:checked');
+    var on = !checked || checked.value === "1";
+    hookFields.forEach(function (field) { field.value = on ? "1" : "0"; });
+    hookEditors.forEach(function (editor) { editor.hidden = !on; });
+  }
+
+  var savedHook = recall(HOOK_KEY);
+  hookChoices.forEach(function (radio) {
+    if (savedHook !== null && radio.value === savedHook) { radio.checked = true; }
+    radio.addEventListener("change", function () { applyHook(); remember(HOOK_KEY, radio.value); });
+  });
+  applyHook();
 })();
 </script>
 {% endblock %}
