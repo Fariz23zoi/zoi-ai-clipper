@@ -32,7 +32,9 @@ from shorts_generator.ai_analyzer import analyze_with_ai
 from shorts_generator.config import (
     CLAUDE_API_KEY, LOCAL_OUTPUT_DIR, OPENAI_API_KEY,
 )
-from shorts_generator.local.clipper import RENDER_SIZES, crop_clip_local
+from shorts_generator.local.clipper import (
+    RENDER_FRAMES, RENDER_SIZES, crop_clip_local,
+)
 from shorts_generator.local import speech_to_text
 from shorts_generator.local.downloader import (
     _extract_youtube_video_id, download_audio_local, download_youtube_local,
@@ -289,6 +291,20 @@ def _aspect(analysis):
     return value if 0.2 <= value <= 5 else DEFAULT_ASPECT
 
 
+def _needed_source_res_for(canvas_width, aspect, frame):
+    """Seperti _needed_source_res, untuk bingkai tertentu.
+
+    Bingkai persegi memakai potongan sisi terpendek video selebar kanvas,
+    jadi sisi terpendek sumber harus setidaknya selebar kanvas.
+    """
+    if frame == "square":
+        for tier in SOURCE_TIERS:
+            if tier >= canvas_width - 1:
+                return tier
+        return SOURCE_TIERS[-1]
+    return _needed_source_res(canvas_width, aspect)
+
+
 def _needed_source_res(canvas_width, aspect):
     """Kualitas sumber paling ringan yang masih mengisi kanvas tanpa
     diperbesar. Nilainya salah satu SOURCE_TIERS (sisi terpendek video).
@@ -352,11 +368,14 @@ def _quality_options(analysis, source_path):
 
     for quality, (width, height) in QUALITIES.items():
         needed = _needed_source_res(width, aspect)
+        square = _needed_source_res_for(width, aspect, "square")
         options.append({
             "id": quality,
             "size": f"{width}x{height}",
             "source": needed,
-            "ready": bool(source_path) and have >= needed
+            "ready": bool(source_path) and have >= needed,
+            "source_square": square,
+            "ready_square": bool(source_path) and have >= square
         })
 
     return options
@@ -1561,8 +1580,12 @@ def select():
     if quality not in QUALITIES:
         return "Kualitas render tidak dikenal.", 400
 
+    frame = request.form.get("frame", "wide").strip()
+    if frame not in RENDER_FRAMES:
+        return "Bingkai tidak dikenal.", 400
+
     size = QUALITIES[quality]
-    needed = _needed_source_res(size[0], _aspect(analysis))
+    needed = _needed_source_res_for(size[0], _aspect(analysis), frame)
 
     video_url = str(analysis.get("url") or "")
     if not _source_path(analysis) and not video_url:
@@ -1573,7 +1596,8 @@ def select():
 
     safe_title = re.sub(r"[^a-zA-Z0-9]+", "_", title).strip("_")[:30] or "klip"
     filename = (
-        f"zoi_{video_id}_{int(start)}-{int(end)}_{quality}p_{safe_title}_"
+        f"zoi_{video_id}_{int(start)}-{int(end)}_{quality}p"
+        f"{'_1x1' if frame == 'square' else ''}_{safe_title}_"
         f"{uuid.uuid4().hex[:6]}.mp4"
     )
     output_path = os.path.join(OUTPUT_DIR, filename)
@@ -1635,7 +1659,7 @@ def select():
 
                 crop_clip_local(
                     source_path, start, end, "9:16", output_path,
-                    progress_callback=update_progress, size=size
+                    progress_callback=update_progress, size=size, frame=frame
                 )
 
                 # 100% hanya setelah file akhir benar-benar ada.
@@ -1662,7 +1686,7 @@ def select():
         "render.html",
         title=title, analyst=analyst, duration=round(end - start, 1),
         start=start, end=end, job_id=job_id, video=analysis,
-        quality=quality, size=f"{size[0]}x{size[1]}"
+        quality=quality, size=f"{size[0]}x{size[1]}", frame=frame
     )
 
 

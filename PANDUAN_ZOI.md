@@ -130,6 +130,15 @@ Buka dari tombol **Klip film dengan file .srt** di halaman utama.
 
 Tidak ada pengenalan suara, jadi prosesnya cepat. Subtitle yang jauh lebih panjang daripada filmnya ditolak, karena kemungkinan untuk versi film lain. Pastikan Anda berhak memakai potongan film itu.
 
+## Bingkai video
+
+Di halaman 3, di bawah **Kualitas render**, ada pilihan **Bingkai video**:
+
+- **16:9 penuh** (bawaan): seluruh gambar asli tampil di tengah, latar blur di atas dan bawah.
+- **1:1 persegi**: bagian tengah gambar dipotong persegi, jadi orang di tengah tampil lebih besar. Bagian kiri dan kanan gambar terpotong. Latar blur tetap ada.
+
+Bingkai 1:1 butuh video sumber yang lebih tajam (misalnya 720p untuk render 720p), jadi kadang ZOI mengunduh ulang sumbernya. Pilihan terakhir diingat browser. Nama file hasil bingkai 1:1 mengandung `_1x1`.
+
 ## Supaya ringan di HP
 
 - **Pilih kualitas render yang lebih rendah** bila HP terasa berat. 480p jauh lebih cepat daripada 720p atau 1080p.

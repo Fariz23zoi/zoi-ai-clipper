@@ -49,12 +49,21 @@
       <label>
         <input class="sr-only" type="radio" name="quality-choice" value="{{ item.id }}"
                data-size="{{ item.size }}" data-source="{{ item.source }}" data-ready="{{ '1' if item.ready else '' }}"
+               data-source-square="{{ item.source_square }}" data-ready-square="{{ '1' if item.ready_square else '' }}"
                {% if item.id == default_quality %}checked{% endif %}>
         <span>{{ item.id }}p</span>
       </label>
       {% endfor %}
     </div>
   </fieldset>
+  <fieldset class="plain" style="margin-top:14px">
+    <legend>Bingkai video</legend>
+    <div class="seg" style="grid-template-columns:1fr 1fr">
+      <label><input class="sr-only" type="radio" name="frame-choice" value="wide" checked><span>16:9 penuh</span></label>
+      <label><input class="sr-only" type="radio" name="frame-choice" value="square"><span>1:1 persegi</span></label>
+    </div>
+  </fieldset>
+  <p class="muted" style="margin:8px 0 0">16:9 menampilkan seluruh gambar. 1:1 memotong bagian tengah gambar sehingga orangnya tampil lebih besar.</p>
   <p class="muted" id="quality-note" style="margin:10px 0 0">Hasil {{ chosen.size }}.
     {% if chosen.ready %}Video sumber sudah tersimpan, jadi render langsung jalan.
     {% elif source_ready %}Video sumber diunduh ulang pada kualitas {{ chosen.source }}p saat render.
@@ -93,6 +102,7 @@
       <input type="hidden" name="start_time" value="{{ clip.start_time }}">
       <input type="hidden" name="end_time" value="{{ clip.end_time }}">
       <input type="hidden" name="quality" value="{{ default_quality }}" class="quality-field">
+      <input type="hidden" name="frame" value="wide" class="frame-field">
       <button class="btn" type="submit" {% if not can_render %}disabled{% endif %}>Render klip ini</button>
     </form>
   </article>
@@ -159,36 +169,59 @@
 <script>
 (function () {
   var radios = document.querySelectorAll('input[name="quality-choice"]');
+  var frames = document.querySelectorAll('input[name="frame-choice"]');
   var fields = document.querySelectorAll(".quality-field");
+  var frameFields = document.querySelectorAll(".frame-field");
   var note = document.getElementById("quality-note");
   var hasSource = {{ 'true' if source_ready else 'false' }};
   var KEY = "zoi-kualitas-render";
+  var FRAME_KEY = "zoi-bingkai";
 
-  function apply(radio) {
+  function currentFrame() {
+    var checked = document.querySelector('input[name="frame-choice"]:checked');
+    return checked ? checked.value : "wide";
+  }
+
+  function apply() {
+    var radio = document.querySelector('input[name="quality-choice"]:checked');
+    if (!radio) { return; }
+    var square = currentFrame() === "square";
+    var source = square ? radio.dataset.sourceSquare : radio.dataset.source;
+    var ready = square ? radio.dataset.readySquare : radio.dataset.ready;
     fields.forEach(function (field) { field.value = radio.value; });
-    var text = "Hasil " + radio.dataset.size + ". ";
-    if (radio.dataset.ready) {
+    frameFields.forEach(function (field) { field.value = currentFrame(); });
+    var text = "Hasil " + radio.dataset.size + (square ? ", bingkai 1:1. " : ". ");
+    if (ready) {
       text += "Video sumber sudah tersimpan, jadi render langsung jalan.";
     } else if (hasSource) {
-      text += "Video sumber diunduh ulang pada kualitas " + radio.dataset.source + "p saat render.";
+      text += "Video sumber diunduh ulang pada kualitas " + source + "p saat render.";
     } else {
-      text += "Video sumber " + radio.dataset.source + "p diunduh saat render pertama.";
+      text += "Video sumber " + source + "p diunduh saat render pertama.";
     }
     note.textContent = text;
   }
 
-  var saved = null;
-  try { saved = window.localStorage.getItem(KEY); } catch (error) { saved = null; }
+  function remember(key, value) {
+    try { window.localStorage.setItem(key, value); } catch (error) { /* tanpa penyimpanan */ }
+  }
 
+  function recall(key) {
+    try { return window.localStorage.getItem(key); } catch (error) { return null; }
+  }
+
+  var saved = recall(KEY);
   radios.forEach(function (radio) {
     if (saved && radio.value === saved) { radio.checked = true; }
-    radio.addEventListener("change", function () {
-      apply(radio);
-      try { window.localStorage.setItem(KEY, radio.value); } catch (error) { /* tanpa penyimpanan */ }
-    });
+    radio.addEventListener("change", function () { apply(); remember(KEY, radio.value); });
   });
 
-  radios.forEach(function (radio) { if (radio.checked) { apply(radio); } });
+  var savedFrame = recall(FRAME_KEY);
+  frames.forEach(function (radio) {
+    if (savedFrame && radio.value === savedFrame) { radio.checked = true; }
+    radio.addEventListener("change", function () { apply(); remember(FRAME_KEY, radio.value); });
+  });
+
+  apply();
 })();
 </script>
 {% endblock %}

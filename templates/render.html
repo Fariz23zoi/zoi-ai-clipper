@@ -8,6 +8,7 @@
     <span class="chip">{{ start|hms }} &ndash; {{ end|hms }}</span>
     <span class="chip">{{ duration }} detik</span>
     <span class="chip">{{ quality }}p ({{ size }})</span>
+    <span class="chip">Bingkai {{ '1:1' if frame == 'square' else '16:9' }}</span>
     {% if analyst %}<span class="chip">{{ analyst }}</span>{% endif %}
   </div>
   <p class="muted" id="step" style="margin:0 0 6px" hidden></p>

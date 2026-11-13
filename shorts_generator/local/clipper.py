@@ -27,6 +27,11 @@ RENDER_SIZES = {
 }
 DEFAULT_RENDER_SIZE = RENDER_SIZES["720"]
 
+# Bingkai video di tengah kanvas 9:16:
+#   "wide"   seluruh frame asli (bawaan, seperti sebelumnya)
+#   "square" bagian tengah frame dipotong persegi 1:1, jadi orang tampil lebih besar
+RENDER_FRAMES = ("wide", "square")
+
 # FFmpeg dijalankan dengan prioritas lebih rendah supaya HP tetap bisa
 # dipakai selama rendering. 0 mematikan fitur ini.
 try:
@@ -290,9 +295,21 @@ def _has_opencv() -> bool:
     return True
 
 
+def _foreground_filter(width: int, height: int, frame: str) -> str:
+    """Filter FFmpeg untuk video di tengah kanvas."""
+    if frame == "square":
+        # Potong persegi dari tengah frame, selebar kanvas.
+        return (
+            "[fg]crop='min(iw,ih)':'min(iw,ih)',"
+            f"scale={width}:{width}[fg];"
+        )
+    return f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
+
+
 def _render_vertical_single_pass(source_path: str, start: float, end: float,
                                  out_path: str, progress_callback=None,
-                                 size: Optional[Tuple[int, int]] = None) -> str:
+                                 size: Optional[Tuple[int, int]] = None,
+                                 frame: str = "wide") -> str:
     """Potong dan ubah ke 9:16 dalam satu kali encode (tanpa OpenCV).
 
     Seluruh frame asli tetap terlihat di tengah; ruang kosong diisi
@@ -306,8 +323,8 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
         f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
         "[bg]scale=180:320:force_original_aspect_ratio=increase,"
         f"crop=180:320,boxblur=6:3,scale={width}:{height}[bg];"
-        f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
-        "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
+        + _foreground_filter(width, height, frame)
+        + "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v]"
     )
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
@@ -336,6 +353,7 @@ def crop_clip_local(
     out_path: str,
     progress_callback=None,
     size: Optional[Tuple[int, int]] = None,
+    frame: str = "wide",
 ) -> str:
     """Cut + reframe one highlight and report rendering progress.
 
@@ -353,10 +371,15 @@ def crop_clip_local(
         if progress_callback:
             progress_callback(1, "Menyiapkan FFmpeg")
 
-        if size or (_ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv()):
+        if frame not in RENDER_FRAMES:
+            raise ValueError(f"Bingkai tidak dikenal: {frame}")
+
+        if size or frame != "wide" or (
+            _ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv()
+        ):
             _render_vertical_single_pass(
                 source_path, start_time, end_time, work_path,
-                progress_callback=progress_callback, size=size
+                progress_callback=progress_callback, size=size, frame=frame
             )
         else:
             _cut_subclip(

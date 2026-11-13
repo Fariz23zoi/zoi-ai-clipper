@@ -199,6 +199,58 @@ class RenderSizeTest(unittest.TestCase):
         self.assertEqual((video["width"], video["height"]), (720, 1280))
 
 
+@unittest.skipUnless(ffmpeg_available(), "FFmpeg/ffprobe tidak terpasang")
+class SquareFrameTest(unittest.TestCase):
+    """Bingkai 1:1: bagian tengah frame dipotong persegi selebar kanvas."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.mkdtemp()
+        cls.source = make_test_video(
+            os.path.join(cls.folder, "lebar.mp4"), seconds=6, size="1280x720"
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.folder, ignore_errors=True)
+
+    def test_filters(self):
+        self.assertIn("crop='min(iw,ih)':'min(iw,ih)'", clipper._foreground_filter(720, 1280, "square"))
+        self.assertIn("scale=720:720", clipper._foreground_filter(720, 1280, "square"))
+        self.assertIn("force_original_aspect_ratio=decrease", clipper._foreground_filter(720, 1280, "wide"))
+
+    def test_square_frame_renders_9_16_with_audio(self):
+        target = os.path.join(self.folder, "persegi.mp4")
+        clipper.crop_clip_local(self.source, 1, 5, "9:16", target, size=(720, 1280), frame="square")
+        streams = probe(target)
+        self.assertEqual((streams["video"]["width"], streams["video"]["height"]), (720, 1280))
+        self.assertIn("audio", streams)
+
+    def test_square_frame_shows_a_taller_picture_than_wide(self):
+        import subprocess
+
+        def picture_rows(path):
+            # Baris yang berbeda tajam dari latar blur = gambar utama.
+            out = subprocess.run(
+                ["ffmpeg", "-v", "error", "-ss", "2", "-i", path, "-frames:v", "1",
+                 "-vf", "scale=36:64,format=gray", "-f", "rawvideo", "-"],
+                capture_output=True, check=True,
+            ).stdout
+            rows = [out[i * 36:(i + 1) * 36] for i in range(64)]
+            return sum(1 for row in rows if max(row) - min(row) > 120)
+
+        wide = os.path.join(self.folder, "w.mp4")
+        square = os.path.join(self.folder, "s.mp4")
+        clipper.crop_clip_local(self.source, 1, 4, "9:16", wide, size=(360, 640), frame="wide")
+        clipper.crop_clip_local(self.source, 1, 4, "9:16", square, size=(360, 640), frame="square")
+        self.assertGreater(picture_rows(square), picture_rows(wide))
+
+    def test_unknown_frame_is_refused(self):
+        with self.assertRaises(ValueError):
+            clipper.crop_clip_local(self.source, 1, 4, "9:16",
+                                    os.path.join(self.folder, "x.mp4"), frame="bulat")
+
+
 class PriorityTest(unittest.TestCase):
     def test_ffmpeg_runs_at_low_priority_when_nice_exists(self):
         command = clipper._with_low_priority(["ffmpeg", "-y"])

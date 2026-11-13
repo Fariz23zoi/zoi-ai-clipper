@@ -665,6 +665,40 @@ class DashboardTest(unittest.TestCase):
             os.rename(self.source + ".simpan", self.source)
             self.set_analysis(url=saved_url)
 
+    def test_46_frame_choice_on_page_and_validation(self):
+        html = self.page()
+        self.assertIn('name="frame-choice" value="wide" checked', html)
+        self.assertIn('name="frame-choice" value="square"', html)
+        self.assertEqual(html.count('name="frame" value="wide" class="frame-field"'),
+                         html.count("Render klip ini"))
+        # Bingkai 1:1 pada 720p butuh sumber 720p (sisi terpendek selebar kanvas).
+        self.assertIn('data-source-square="720"', html)
+        response = self.client.post("/select", data={
+            "video_id": VIDEO_ID, "start_time": "3", "end_time": "13", "frame": "bulat",
+        })
+        self.assertEqual(response.status_code, 400)
+
+    @NEEDS_FFMPEG
+    def test_47_square_frame_render(self):
+        self.set_analysis(source_res=720)
+        job_id, html = self.render(quality="480", frame="square", end_time="8")
+        self.assertIn("Bingkai 1:1", html)
+        data, _ = self.wait(f"/progress/{job_id}")
+        self.assertEqual(data["status"], "done", data)
+        self.assertIn("_480p_1x1_", data["filename"])
+        video = probe(os.path.join(self.folder, data["filename"]))["video"]
+        self.assertEqual((video["width"], video["height"]), (480, 854))
+        self.assertEqual(self.downloads, [])
+
+    def test_48_square_frame_rule(self):
+        for quality, tier in (("240", 240), ("480", 480), ("720", 720), ("1080", 1080)):
+            width = zoi_app.QUALITIES[quality][0]
+            self.assertEqual(zoi_app._needed_source_res_for(width, 16 / 9, "square"), tier)
+            self.assertEqual(
+                zoi_app._needed_source_res_for(width, 16 / 9, "wide"),
+                zoi_app._needed_source_res(width, 16 / 9),
+            )
+
     # ================================================= unduhan saat render
 
     @NEEDS_FFMPEG
