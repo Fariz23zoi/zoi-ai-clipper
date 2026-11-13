@@ -1588,11 +1588,15 @@ def delete_clip():
     return redirect(url_for("home"))
 
 
-@app.route("/select", methods=["POST"])
-def select():
-    video_id = request.form.get("video_id", "")
-    title = request.form.get("title", "")[:100]
-    analyst = request.form.get("analyst", "")[:60]
+def _start_render(form):
+    """Periksa permintaan render satu klip lalu masukkan ke antrean.
+
+    Mengembalikan (pesan, kode) bila ditolak, atau dict data halaman
+    render bila diterima. Dipakai oleh /select dan /render/batch.
+    """
+    video_id = form.get("video_id", "")
+    title = form.get("title", "")[:100]
+    analyst = form.get("analyst", "")[:60]
 
     if not exchange.is_valid_video_id(video_id):
         return "Video tidak dikenal.", 400
@@ -1602,8 +1606,8 @@ def select():
         return "Video belum dianalisis.", 400
 
     try:
-        start = float(request.form.get("start_time", ""))
-        end = float(request.form.get("end_time", ""))
+        start = float(form.get("start_time", ""))
+        end = float(form.get("end_time", ""))
     except ValueError:
         return "Timestamp tidak valid.", 400
 
@@ -1618,32 +1622,32 @@ def select():
     if not MIN_RENDER_SECONDS <= end - start <= MAX_RENDER_SECONDS:
         return "Durasi klip di luar batas yang diizinkan.", 400
 
-    quality = request.form.get("quality", DEFAULT_QUALITY).strip().rstrip("pP")
+    quality = form.get("quality", DEFAULT_QUALITY).strip().rstrip("pP")
     if quality not in QUALITIES:
         return "Kualitas render tidak dikenal.", 400
 
-    frame = request.form.get("frame", "wide").strip()
+    frame = form.get("frame", "wide").strip()
     if frame not in RENDER_FRAMES:
         return "Bingkai tidak dikenal.", 400
 
     try:
-        crop_x = float(request.form.get("crop_x", "50") or 50)
+        crop_x = float(form.get("crop_x", "50") or 50)
     except ValueError:
         return "Posisi potong tidak valid.", 400
     if crop_x != crop_x:
         return "Posisi potong tidak valid.", 400
     crop_x = max(0.0, min(100.0, crop_x))
 
-    typed_hook = clean_hook_text(request.form.get("hook_text", ""))
-    hook_text = typed_hook if request.form.get("hook_on") == "1" else ""
-    intro_text = typed_hook if request.form.get("intro_on") == "1" else ""
+    typed_hook = clean_hook_text(form.get("hook_text", ""))
+    hook_text = typed_hook if form.get("hook_on") == "1" else ""
+    intro_text = typed_hook if form.get("intro_on") == "1" else ""
 
-    voice_gender = request.form.get("voice", "wanita")
+    voice_gender = form.get("voice", "wanita")
     if voice_gender not in voiceover.GENDERS:
         return "Suara pembaca tidak dikenal.", 400
 
-    hook_style = request.form.get("hook_style", "box")
-    hook_position = request.form.get("hook_pos", "top")
+    hook_style = form.get("hook_style", "box")
+    hook_position = form.get("hook_pos", "top")
     if hook_style not in HOOK_STYLES or hook_position not in HOOK_POSITIONS:
         return "Gaya atau posisi hook tidak dikenal.", 400
 
@@ -1789,13 +1793,65 @@ def select():
 
     threading.Thread(target=render_worker, daemon=True).start()
 
-    return render_template(
-        "render.html",
+    return dict(
         title=title, analyst=analyst, duration=round(end - start, 1),
         start=start, end=end, job_id=job_id, video=analysis,
         quality=quality, size=f"{size[0]}x{size[1]}", frame=frame,
         crop_x=crop_x, hook_text=hook_text, intro_text=intro_text,
         hook_style=hook_style, hook_position=hook_position, voice=voice_gender
+    )
+
+
+@app.route("/select", methods=["POST"])
+def select():
+    result = _start_render(request.form)
+    if isinstance(result, tuple):
+        return result
+    return render_template("render.html", **result)
+
+
+MAX_BATCH = 20
+
+
+@app.route("/render/batch", methods=["POST"])
+def render_batch():
+    """Masukkan beberapa klip sekaligus ke antrean render (tombol Render semua)."""
+    clips = request.get_json(silent=True)
+    if not isinstance(clips, list) or not clips:
+        return jsonify({"error": "Tidak ada klip yang dikirim."}), 400
+    if len(clips) > MAX_BATCH:
+        return jsonify({"error": f"Paling banyak {MAX_BATCH} klip sekaligus."}), 400
+
+    jobs, errors = [], []
+    for index, clip in enumerate(clips, 1):
+        if not isinstance(clip, dict):
+            errors.append({"index": index, "error": "Data klip tidak valid."})
+            continue
+        form = {str(key): str(value) for key, value in clip.items()}
+        result = _start_render(form)
+        if isinstance(result, tuple):
+            errors.append({"index": index, "title": form.get("title", "")[:100],
+                           "error": result[0]})
+        else:
+            jobs.append({"job_id": result["job_id"], "title": result["title"]})
+
+    return jsonify({"jobs": jobs, "errors": errors}), 200 if jobs else 400
+
+
+@app.route("/render/batch/view")
+def render_batch_view():
+    """Halaman progres untuk banyak klip sekaligus."""
+    ids = [
+        job_id for job_id in request.args.get("jobs", "").split(",")
+        if re.fullmatch(r"[0-9a-f]{32}", job_id)
+    ][:MAX_BATCH]
+    titles = request.args.getlist("t")[:len(ids)]
+    titles += [""] * (len(ids) - len(titles))
+    video_id = request.args.get("video", "")
+    if not exchange.is_valid_video_id(video_id):
+        video_id = ""
+    return render_template(
+        "batch.html", jobs=list(zip(ids, titles)), video_id=video_id
     )
 
 

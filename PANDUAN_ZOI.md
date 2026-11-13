@@ -130,6 +130,12 @@ Buka dari tombol **Klip film dengan file .srt** di halaman utama.
 
 Tidak ada pengenalan suara, jadi prosesnya cepat. Subtitle yang jauh lebih panjang daripada filmnya ditolak, karena kemungkinan untuk versi film lain. Pastikan Anda berhak memakai potongan film itu.
 
+## Render semua
+
+Di bawah tiap kelompok kandidat yang berisi lebih dari satu klip ada tombol **Render semua (N klip)**. Semua klip di kelompok itu masuk antrean dan dirender satu per satu, memakai pengaturan yang sedang dipilih (kualitas, bingkai, posisi potong, blok hook, pembuka, suara) dan teks hook masing-masing klip.
+
+Halaman berikutnya menampilkan progres tiap klip dan total ("3 dari 5 klip selesai"), serta tombol unduh video dan thumbnail untuk setiap klip yang selesai. Klip yang gagal tidak menghentikan klip lain. Maksimal 20 klip sekaligus.
+
 ## Bingkai video
 
 Di halaman 3, di bawah **Kualitas render**, ada pilihan **Bingkai video**:

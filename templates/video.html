@@ -167,6 +167,12 @@
   </article>
   {% endfor %}
 
+  {% if group.clips|length > 1 and can_render %}
+  <button class="btn secondary render-all" type="button" style="margin-top:12px"
+          data-count="{{ group.clips|length }}">Render semua ({{ group.clips|length }} klip)</button>
+  <p class="small render-all-status" role="status" style="margin:6px 0 0"></p>
+  {% endif %}
+
   {% if group.rejected %}
   <details>
     <summary><span class="small">{{ group.rejected|length }} kandidat ditolak validasi</span></summary>
@@ -314,6 +320,45 @@
   }
   frames.forEach(function (radio) { radio.addEventListener("change", showCropPanel); });
   showCropPanel();
+
+  // ---- render semua
+  document.querySelectorAll(".render-all").forEach(function (button) {
+    button.addEventListener("click", async function () {
+      var group = button.closest("details");
+      var status = group.querySelector(".render-all-status");
+      var forms = group.querySelectorAll('form[action$="/select"]');
+      if (!window.confirm("Render " + forms.length + " klip dengan pengaturan di atas? Klip dirender satu per satu.")) {
+        return;
+      }
+      var clips = [];
+      forms.forEach(function (form) {
+        var data = {};
+        new FormData(form).forEach(function (value, key) { data[key] = value; });
+        clips.push(data);
+      });
+      button.disabled = true;
+      status.textContent = "Memasukkan " + clips.length + " klip ke antrean...";
+      try {
+        var response = await fetch("{{ url_for('render_batch') }}", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(clips)
+        });
+        var data = await response.json();
+        if (!data.jobs || !data.jobs.length) {
+          var reason = (data.errors && data.errors[0] && data.errors[0].error) || data.error || "Tidak ada klip yang bisa dirender.";
+          throw new Error(reason);
+        }
+        var params = new URLSearchParams();
+        params.set("jobs", data.jobs.map(function (job) { return job.job_id; }).join(","));
+        params.set("video", "{{ video.video_id }}");
+        data.jobs.forEach(function (job) { params.append("t", job.title); });
+        window.location.href = "{{ url_for('render_batch_view') }}?" + params.toString();
+      } catch (error) {
+        status.textContent = "Gagal: " + error.message;
+        button.disabled = false;
+      }
+    });
+  });
 
   // ---- blok hook dan pembuka
   function choice(name, fallback) {
