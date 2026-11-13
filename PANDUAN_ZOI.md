@@ -182,14 +182,16 @@ Di halaman 3 ada sakelar **Pembuka: thumbnail + suara pembaca**. Bila aktif, kli
 
 1. Pasang VoiceStudio dari halaman [Releases](https://github.com/debpalash/VoiceStudio/releases/latest) (Windows: installer `.exe`).
 2. Di VoiceStudio, buat dua profil suara bernama **pria** dan **wanita** (misalnya lewat desain suara atau dari rekaman suara yang Anda punya izinnya). Nama lain bisa dipakai lewat `ZOI_VOICESTUDIO_PRIA` dan `ZOI_VOICESTUDIO_WANITA`.
-3. Biarkan VoiceStudio terbuka saat merender. Setelah render ada keterangan "Suara pembaca dibuat dengan VoiceStudio".
+3. Biarkan VoiceStudio terbuka saat merender. Di halaman 3, di bawah pilihan suara, ada keterangan apakah VoiceStudio terlihat oleh ZOI. Setelah render ada keterangan "Suara pembaca dibuat dengan VoiceStudio".
 
 Bila VoiceStudio tidak terbuka, menolak permintaan, atau gagal, ZOI otomatis kembali ke Edge lalu Piper, dan alasannya ditampilkan setelah render.
 
 Catatan jujur: VoiceStudio memakai model AI yang jauh lebih besar dari Edge atau Piper. Di laptop tanpa kartu grafis kuat (misalnya AMD Radeon R2), membuat suara bisa sangat lambat; pembuatnya tidak menerbitkan angka kecepatan untuk prosesor seperti ini, dan kami belum bisa mengujinya langsung. Coba dulu dengan satu klip.
 ## Blok hook
 
-Di halaman 3 ada sakelar **Blok hook selama video (setelah pembuka)** (Aktif/Mati). Bawaannya **Mati**: teks hook hanya tampil di pembuka dan hilang begitu suara pembaca selesai. (Dulu bawaannya Aktif, sehingga kartu kuning tetap tampil sepanjang video; pilihan lama yang tersimpan di browser tidak lagi dipakai.) Bila diaktifkan, teks hook tampil sepanjang klip, maksimal 3 baris (ukuran huruf mengecil otomatis untuk teks panjang). Pilih gayanya, **Kotak gelap** atau **Kartu kuning**, dan posisinya, **Atas** atau **Tengah**.
+Di halaman 3 ada sakelar **Blok hook selama video (setelah pembuka)** (Aktif/Mati). Bawaannya **Mati**: teks hook hanya tampil di pembuka dan hilang begitu suara pembaca selesai. (Dulu bawaannya Aktif, sehingga kartu kuning tetap tampil sepanjang video; pilihan lama yang tersimpan di browser tidak lagi dipakai.) Bila diaktifkan, teks hook tampil sepanjang klip, maksimal 3 baris (ukuran huruf mengecil otomatis untuk teks panjang). Pilih gayanya, **Kotak gelap** atau **Kartu kuning**, dan posisinya, **Atas**, **Tengah**, atau **Bawah**.
+
+- **Bawah** meletakkan teks tepat di bawah video (di ruang latar blur), bukan di dasar layar, karena bagian paling bawah Shorts/Reels/TikTok tertutup judul dan tombol aplikasi. Bila ruang di bawah video tidak cukup (misalnya bingkai 1:1 dengan teks 3 baris), teks diletakkan sedikit di atas dasar layar dan menutupi bagian bawah video.
 
 - Tiap klip punya kotak **Teks blok hook** yang terisi otomatis dari hook hasil analisis; teks yang sama dipakai untuk pembuka. Edit teksnya sesuka Anda sebelum menekan **Render klip ini**.
 - Tanda seperti `[tertawa]` dan emoji dibuang otomatis, karena font biasa tidak punya gambar emoji. Maksimal 150 karakter.

@@ -95,6 +95,7 @@
     <label><input class="sr-only" type="radio" name="voice-choice" value="wanita" checked><span>Suara wanita</span></label>
   </div>
   <p class="muted" style="margin:8px 0 0">Klip diawali gambar diam dengan kartu hook kuning di tengah sambil hook dibacakan, lalu konten dimulai. Gambar itu juga disimpan sebagai thumbnail.
+    <br><span class="small" id="voicestudio-status">{% if voicestudio_on %}VoiceStudio terbuka di laptop ini: suara pembaca dibuat dengan VoiceStudio (profil "pria"/"wanita").{% else %}VoiceStudio tidak terbuka, jadi dipakai suara Edge (atau Piper bila tanpa internet). Buka aplikasi VoiceStudio lalu muat ulang halaman ini untuk memakainya.{% endif %}</span>
     {% if not voice_ready %}<br><span class="warn">Suara pembaca belum terpasang, jadi pembuka dibuat tanpa suara. Jalankan ulang mulai_windows.bat untuk memasangnya.</span>{% endif %}</p>
 
   <fieldset class="plain" style="margin-top:14px">
@@ -110,9 +111,10 @@
       <label><input class="sr-only" type="radio" name="style-choice" value="box" checked><span>Kotak gelap</span></label>
       <label><input class="sr-only" type="radio" name="style-choice" value="card"><span>Kartu kuning</span></label>
     </div>
-    <div class="seg" style="grid-template-columns:1fr 1fr;margin-top:8px">
+    <div class="seg" style="grid-template-columns:1fr 1fr 1fr;margin-top:8px">
       <label><input class="sr-only" type="radio" name="pos-choice" value="top" checked><span>Atas</span></label>
       <label><input class="sr-only" type="radio" name="pos-choice" value="middle"><span>Tengah</span></label>
+      <label><input class="sr-only" type="radio" name="pos-choice" value="bottom"><span>Bawah</span></label>
     </div>
   </div>
   <p class="muted" style="margin:8px 0 0">Teks hook terisi otomatis dari hasil analisis dan bisa diedit di tiap klip sebelum dirender. Teks yang sama dipakai untuk pembuka.</p>

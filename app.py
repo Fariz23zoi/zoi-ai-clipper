@@ -1446,6 +1446,8 @@ def _render_video_page(analysis, status=200, **extra):
         ai_names=" dan ".join(item["name"] for item in _analysts_for(mode)),
         voice_ready=voiceover.is_available(),
         reframe_ready=reframe.available(),
+        voicestudio_on=voiceover.ENGINE in ("auto", "voicestudio")
+        and voiceover.voicestudio_running(),
         source_ready=source_path is not None,
         source_is_local=source_path is not None and source_path == _local_film(analysis),
         source_mb=_size_mb(source_path),

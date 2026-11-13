@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Rendering - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card" aria-live="polite">
+  <h1>Rendering klip</h1>
+  <p style="overflow-wrap:anywhere"><strong>{{ title }}</strong></p>
+  <div class="meta">
+    <span class="chip">{{ start|hms }} &ndash; {{ end|hms }}</span>
+    <span class="chip">{{ duration }} detik</span>
+    <span class="chip">{{ quality }}p ({{ size }})</span>
+    <span class="chip">Bingkai {{ '1:1' if frame == 'square' else ('otomatis' if frame == 'auto' else '16:9') }}{% if frame == 'square' and crop_x != 50 %} ({{ 'kiri' if crop_x < 50 else 'kanan' }} {{ crop_x|round|int }}%){% endif %}</span>
+    {% if hook_text %}<span class="chip">Blok hook {{ 'kartu kuning' if hook_style == 'card' else 'kotak gelap' }}, {{ 'tengah' if hook_position == 'middle' else 'atas' }}</span>{% endif %}
+    {% if intro_text %}<span class="chip">Pembuka + suara {{ voice }}</span>{% endif %}
+    {% if analyst %}<span class="chip">{{ analyst }}</span>{% endif %}
+  </div>
+  <p class="muted" id="step" style="margin:0 0 6px" hidden></p>
+  <div class="bar" id="bar"><div></div></div>
+  <p class="percent" id="percent">0%</p>
+  <p id="stage">Menyiapkan...</p>
+  <div id="result"></div>
+  <a class="btn secondary" style="margin-top:12px"
+     href="{{ url_for('video_page', video_id=video.video_id) }}">Kembali ke daftar kandidat</a>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var bar = document.getElementById("bar");
+  var fill = bar.firstElementChild;
+  var step = document.getElementById("step");
+  var percent = document.getElementById("percent");
+  var stage = document.getElementById("stage");
+  var result = document.getElementById("result");
+
+  function showVideo(filename, data) {
+    var base = "{{ url_for('home') }}output/" + encodeURIComponent(filename);
+    var ok = document.createElement("div");
+    ok.className = "alert ok";
+    ok.textContent = "Rendering berhasil. Video tersimpan di folder output.";
+    var video = document.createElement("video");
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+    video.src = base;
+    var download = document.createElement("a");
+    download.className = "btn";
+    download.href = base + "?dl=1";
+    download.textContent = "Unduh video MP4";
+    var parts = [ok, video, download];
+    if (data.thumbnail) {
+      var thumb = document.createElement("a");
+      thumb.className = "btn secondary";
+      thumb.style.marginTop = "8px";
+      thumb.href = "{{ url_for('home') }}thumb/" + encodeURIComponent(data.thumbnail) + "?dl=1";
+      thumb.textContent = "Unduh thumbnail (JPG)";
+      parts.push(thumb);
+    }
+    if (data.notice) {
+      var note = document.createElement("div");
+      note.className = "alert info";
+      note.textContent = data.notice;
+      parts.push(note);
+    }
+    result.replaceChildren.apply(result, parts);
+  }
+
+  function showError(message) {
+    var box = document.createElement("div");
+    box.className = "alert bad";
+    box.setAttribute("role", "alert");
+    box.textContent = "Proses gagal: " + (message || "penyebab tidak diketahui");
+    bar.classList.remove("busy");
+    result.replaceChildren(box);
+  }
+
+  async function check() {
+    try {
+      var response = await fetch("{{ url_for('render_progress', job_id=job_id) }}", {cache: "no-store"});
+      if (response.status === 404) {
+        showError("Proses render tidak ditemukan. Aplikasi mungkin baru dijalankan ulang.");
+        return;
+      }
+      var data = await response.json();
+      step.hidden = !data.step;
+      step.textContent = data.step || "";
+      if (typeof data.progress === "number") {
+        bar.classList.remove("busy");
+        fill.style.width = data.progress + "%";
+        percent.hidden = false;
+        percent.textContent = data.progress + "%";
+      } else {
+        // Tahap yang tidak punya angka (misalnya menghubungi YouTube).
+        bar.classList.add("busy");
+        fill.style.width = "";
+        percent.hidden = true;
+      }
+      stage.textContent = data.stage;
+      if (data.status === "done") { showVideo(data.filename, data); return; }
+      if (data.status === "error") { showError(data.error); return; }
+      setTimeout(check, 800);
+    } catch (error) {
+      stage.textContent = "Menghubungkan kembali...";
+      setTimeout(check, 1500);
+    }
+  }
+  check();
+})();
+</script>
+{% endblock %}

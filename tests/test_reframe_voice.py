@@ -563,5 +563,65 @@ class LauncherTest(unittest.TestCase):
         self.assertNotIn("opencv", (root / "requirements-termux.txt").read_text(encoding="utf-8"))
 
 
+
+class BottomHookTest(unittest.TestCase):
+    def layout(self, frame, text="Teks hook di bawah"):
+        if not clipper.find_hook_font():
+            self.skipTest("font tidak tersedia")
+        import re
+        folder = tempfile.mkdtemp()
+        try:
+            filters = clipper._hook_filters(text, 720, 1280, frame, 16 / 9, folder,
+                                            style="box", position="bottom")
+        finally:
+            shutil.rmtree(folder)
+        return [int(y) for y in re.findall(r":y=(\d+)", filters)]
+
+    def test_bottom_is_a_position(self):
+        self.assertIn("bottom", clipper.HOOK_POSITIONS)
+
+    def test_text_sits_just_below_the_video(self):
+        ys = self.layout("wide")
+        video_bottom = (1280 + 405) / 2
+        self.assertGreater(min(ys), video_bottom)
+        self.assertLess(max(ys), 1280 * 0.85)
+
+    def test_long_text_on_square_stays_on_screen(self):
+        ys = self.layout("square", "kata " * 30)
+        self.assertLess(max(ys), 1280 * 0.96)
+        self.assertGreater(min(ys), 1280 / 2)
+
+
+@unittest.skipUnless(zoi_app is not None, "app.py tidak bisa diimpor")
+class BottomHookPageTest(DashboardTest):
+    def test_page_offers_bottom_and_voicestudio_status(self):
+        saved = voiceover.voicestudio_running
+        try:
+            for running, text in ((False, "VoiceStudio tidak terbuka"), (True, "VoiceStudio terbuka")):
+                voiceover.voicestudio_running = lambda timeout=0.4, r=running: r
+                html = self.client.get(f"/video/{VIDEO_ID}").get_data(as_text=True)
+                self.assertIn('name="pos-choice" value="bottom"', html)
+                self.assertIn(text, html)
+        finally:
+            voiceover.voicestudio_running = saved
+
+    @unittest.skipUnless(ffmpeg_available(), "FFmpeg tidak terpasang")
+    def test_render_with_bottom_hook(self):
+        response = self.client.post("/select", data={
+            "video_id": VIDEO_ID, "title": "Klip", "start_time": "1", "end_time": "8",
+            "quality": "240", "hook_on": "1", "hook_text": "Teks bawah", "hook_pos": "bottom"})
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn("kotak gelap, bawah", html)
+        job = html.split("/progress/")[1].split('"')[0]
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            status = self.client.get(f"/progress/{job}").get_json()
+            if status["status"] in ("done", "error"):
+                break
+            time.sleep(0.1)
+        self.assertEqual(status["status"], "done", status)
+
+
 if __name__ == "__main__":
     unittest.main()

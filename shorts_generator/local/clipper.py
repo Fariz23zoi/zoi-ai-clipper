@@ -392,7 +392,7 @@ _CARD_FONTS = (
 )
 
 HOOK_STYLES = ("box", "card")
-HOOK_POSITIONS = ("top", "middle")
+HOOK_POSITIONS = ("top", "middle", "bottom")
 CARD_COLOR = "0xF7C948"
 CARD_SHADOW = "0xC9961A"
 
@@ -475,7 +475,8 @@ def _hook_filters(text: str, width: int, height: int, frame: str,
                   aspect: float, work_dir: str, style: str = "box",
                   position: str = "top", prefix: str = "hook") -> str:
     """Filter blok hook: "box" (teks putih di kotak gelap) atau "card"
-    (kartu kuning dengan teks hitam kapital), di "top" atau "middle".
+    (kartu kuning dengan teks hitam kapital), di "top", "middle", atau
+    "bottom" (tepat di bawah video).
 
     Font dan teks disalin ke folder kerja lalu dipanggil dengan nama
     pendek, supaya tidak ada masalah tanda khusus pada path Windows
@@ -517,6 +518,15 @@ def _hook_filters(text: str, width: int, height: int, frame: str,
 
     if position == "middle":
         top = int((height - total) / 2)
+    elif position == "bottom":
+        # Tepat di bawah video, bukan di dasar layar: bagian paling bawah
+        # Shorts/Reels tertutup judul dan tombol aplikasi.
+        gap = int(height * 0.02)
+        below = int(height - top_space)
+        if top_space >= total + gap:
+            top = below + gap
+        else:
+            top = int(height * 0.96) - total
     elif top_space >= total:
         top = int((top_space - total) / 2)
     else:
