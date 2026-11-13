@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -541,7 +542,7 @@ def _analysts_for(mode):
     ]
 
 
-def _home(error="", status=200):
+def _home(error="", status=200, message=""):
     videos = exchange.list_videos()[:10]
 
     for item in videos:
@@ -553,8 +554,117 @@ def _home(error="", status=200):
         keys=_provider_keys(),
         videos=videos,
         renders=_list_renders(limit=10),
-        storage=_storage_summary()
+        storage=_storage_summary(),
+        message=message,
+        has_history=bool(videos) or _data_folders() != []
     ), status
+
+
+# ------------------------------------------------------------ hapus riwayat
+
+def _data_folders():
+    """ID video yang punya folder data (analisis atau transkrip)."""
+    try:
+        names = os.listdir(exchange.DATA_DIR)
+    except OSError:
+        return []
+    return [
+        name for name in names
+        if exchange.is_valid_video_id(name)
+        and os.path.isdir(os.path.join(exchange.DATA_DIR, name))
+    ]
+
+
+def _busy():
+    """True bila ada analisis, unduhan, atau render yang masih berjalan."""
+    with _JOBS_LOCK:
+        return any(
+            job.get("status") in ("queued", "running")
+            for jobs in (RENDER_JOBS, ANALYZE_JOBS, AUDIO_JOBS)
+            for job in jobs.values()
+        )
+
+
+def _remove(path):
+    try:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+        return True
+    except OSError:
+        return False
+
+
+def _delete_video_files(video_id, renders=False):
+    """Hapus semua file milik satu video di folder output.
+
+    Film di laptop (halaman Klip film) tidak pernah dihapus, karena berada
+    di luar folder output.
+    """
+    if not exchange.is_valid_video_id(video_id):
+        return 0
+
+    removed = 0
+    if _remove(os.path.join(exchange.DATA_DIR, video_id)):
+        removed += 1
+
+    prefixes = [f"source_{video_id}.", f"audio_{video_id}.",
+                f"youtube_transcript_{video_id}."]
+    if renders:
+        prefixes.append(f"zoi_{video_id}_")
+
+    try:
+        names = os.listdir(OUTPUT_DIR)
+    except OSError:
+        names = []
+
+    for name in names:
+        if any(name.startswith(prefix) for prefix in prefixes):
+            if _remove(os.path.join(OUTPUT_DIR, name)):
+                removed += 1
+    return removed
+
+
+@app.route("/video/<video_id>/delete", methods=["POST"])
+def delete_video(video_id):
+    analysis = _load_video(video_id)
+    if _has_active_render(video_id):
+        return _render_video_page(
+            analysis, 409,
+            page_error="Video ini sedang dirender. Tunggu sampai selesai, lalu hapus."
+        )
+
+    _delete_video_files(video_id, renders=request.form.get("renders") == "1")
+    return redirect(url_for("home", cleared="video"))
+
+
+@app.route("/history/clear", methods=["POST"])
+def clear_history():
+    """Hapus seluruh riwayat analisis, dan bila diminta, semua hasil render."""
+    if _busy():
+        return _home(
+            "Masih ada analisis, unduhan, atau render yang berjalan. "
+            "Tunggu sampai selesai, lalu hapus riwayat.", 409
+        )
+
+    renders = request.form.get("renders") == "1"
+    for video_id in _data_folders():
+        _delete_video_files(video_id, renders=renders)
+
+    # File sisa yang tidak punya folder data lagi.
+    leftovers = ("source_", "audio_", "youtube_transcript_")
+    if renders:
+        leftovers += ("zoi_",)
+    try:
+        names = os.listdir(OUTPUT_DIR)
+    except OSError:
+        names = []
+    for name in names:
+        if name.startswith(leftovers):
+            _remove(os.path.join(OUTPUT_DIR, name))
+
+    return redirect(url_for("home", cleared="all_renders" if renders else "all"))
 
 
 # ------------------------------------------------------------------ analisis
@@ -841,9 +951,16 @@ def _analyze_worker(job_id, video_url, mode, transcript=None):
 
 # ---------------------------------------------------------------------- rute
 
+CLEARED_MESSAGES = {
+    "video": "Video itu sudah dihapus dari riwayat.",
+    "all": "Semua riwayat analisis sudah dihapus. Klip hasil render tetap ada.",
+    "all_renders": "Semua riwayat dan klip hasil render sudah dihapus.",
+}
+
+
 @app.route("/")
 def home():
-    return _home()
+    return _home(message=CLEARED_MESSAGES.get(request.args.get("cleared", ""), ""))
 
 
 @app.route("/analyze", methods=["POST"])

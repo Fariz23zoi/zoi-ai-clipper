@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 {% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+{% if message %}<div class="alert ok" role="status">{{ message }}</div>{% endif %}
 
 <form class="card" method="POST" action="{{ url_for('analyze') }}">
   <p class="step">Langkah 1 &middot; Tempel link</p>
@@ -100,5 +101,19 @@
   <p class="muted">Untuk mengosongkan ruang, buka salah satu video di atas lalu tekan Hapus video sumber.
     Kandidatnya tetap tersimpan, dan video diunduh lagi bila Anda merender.</p>
 </section>
+{% endif %}
+
+{% if has_history or renders %}
+<form class="card" method="POST" action="{{ url_for('clear_history') }}"
+      data-confirm="Hapus semua riwayat? Analisis, transkrip, hasil impor Claude/ChatGPT, dan video sumber akan dihapus. Tidak bisa dikembalikan."
+      onsubmit="return confirm(this.dataset.confirm)">
+  <h2>Hapus semua riwayat</h2>
+  <p class="muted">Mulai bersih: semua analisis, transkrip, hasil impor Claude/ChatGPT, dan video sumber dihapus.
+    File film di laptop dan pengaturan aplikasi tidak disentuh.</p>
+  <label class="small" style="display:flex;gap:8px;align-items:center;margin:8px 0 12px">
+    <input type="checkbox" name="renders" value="1"> Hapus juga semua klip hasil render dan thumbnail
+  </label>
+  <button class="btn danger" type="submit">Hapus semua riwayat</button>
+</form>
 {% endif %}
 {% endblock %}

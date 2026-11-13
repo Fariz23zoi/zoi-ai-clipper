@@ -228,6 +228,17 @@
 </section>
 {% endif %}
 
+<form class="card" method="POST" action="{{ url_for('delete_video', video_id=video.video_id) }}"
+      data-confirm="Hapus video ini dari riwayat? Analisis, transkrip, hasil impor, dan video sumbernya akan dihapus."
+      onsubmit="return confirm(this.dataset.confirm)">
+  <h2>Hapus video ini dari riwayat</h2>
+  <p class="muted">Untuk menganalisis ulang link ini dari nol. Transkrip dan hasil impor Claude/ChatGPT yang lama ikut terhapus.</p>
+  <label class="small" style="display:flex;gap:8px;align-items:center;margin:8px 0 12px">
+    <input type="checkbox" name="renders" value="1"> Hapus juga klip hasil render dari video ini
+  </label>
+  <button class="btn danger" type="submit">Hapus video ini</button>
+</form>
+
 <a class="btn secondary" style="margin-top:14px" href="{{ url_for('home') }}">Analisis video lain</a>
 {% endblock %}
 {% block scripts %}

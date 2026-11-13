@@ -130,6 +130,13 @@ Buka dari tombol **Klip film dengan file .srt** di halaman utama.
 
 Tidak ada pengenalan suara, jadi prosesnya cepat. Subtitle yang jauh lebih panjang daripada filmnya ditolak, karena kemungkinan untuk versi film lain. Pastikan Anda berhak memakai potongan film itu.
 
+## Hapus riwayat
+
+- **Hapus semua riwayat** (halaman utama): menghapus semua analisis, transkrip, hasil impor Claude/ChatGPT, video sumber, serta file audio dan subtitle sementara. Centang **Hapus juga semua klip hasil render dan thumbnail** untuk benar-benar mulai dari kosong.
+- **Hapus video ini dari riwayat** (halaman tiap video): sama, tetapi hanya untuk satu video. Gunakan ini untuk menganalisis ulang satu link dari nol.
+- Tidak pernah dihapus: file film di laptop (halaman Klip film), model suara di folder `models`, dan pengaturan aplikasi.
+- Ditolak selama masih ada analisis, unduhan, atau render yang berjalan.
+
 ## Render semua
 
 Di bawah tiap kelompok kandidat yang berisi lebih dari satu klip ada tombol **Render semua (N klip)**. Semua klip di kelompok itu masuk antrean dan dirender satu per satu, memakai pengaturan yang sedang dipilih (kualitas, bingkai, posisi potong, blok hook, pembuka, suara) dan teks hook masing-masing klip.
