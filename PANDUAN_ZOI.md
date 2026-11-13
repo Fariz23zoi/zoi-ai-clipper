@@ -141,7 +141,7 @@ Tidak ada pengenalan suara, jadi prosesnya cepat. Subtitle yang jauh lebih panja
 
 Di bawah tiap kelompok kandidat yang berisi lebih dari satu klip ada tombol **Render semua (N klip)**. Semua klip di kelompok itu masuk antrean dan dirender satu per satu, memakai pengaturan yang sedang dipilih (kualitas, bingkai, posisi potong, blok hook, pembuka, suara) dan teks hook masing-masing klip.
 
-Halaman berikutnya menampilkan progres tiap klip dan total ("3 dari 5 klip selesai"), serta tombol unduh video dan thumbnail untuk setiap klip yang selesai. Klip yang gagal tidak menghentikan klip lain. Maksimal 20 klip sekaligus.
+Halaman berikutnya menampilkan progres tiap klip dan total ("3 dari 5 klip selesai"), serta pemutar video (bisa ditonton langsung), tombol unduh video, dan thumbnail untuk setiap klip yang selesai. Klip yang gagal tidak menghentikan klip lain. Maksimal 20 klip sekaligus.
 
 ## Bingkai video
 
@@ -152,7 +152,15 @@ Di halaman 3, di bawah **Kualitas render**, ada pilihan **Bingkai video**:
 
 Saat **1:1 persegi** dipilih, muncul penggeser **Posisi potongan 1:1** (Kiri sampai Kanan) untuk orang yang tidak duduk di tengah. Setelah video sumber terunduh, ada gambar pratinjau dengan kotak terang yang menunjukkan bagian yang tampil di klip. Posisi ini diingat untuk tiap video.
 
-Bingkai 1:1 butuh video sumber yang lebih tajam (misalnya 720p untuk render 720p), jadi kadang ZOI mengunduh ulang sumbernya. Pilihan terakhir diingat browser. Nama file hasil bingkai 1:1 mengandung `_1x1`.
+- **Otomatis**: ZOI memeriksa video dua kali per detik dan mengenali pergantian kamera. Pada tiap shot:
+  - tampak **satu pembicara** (atau beberapa orang yang duduk berdekatan): dipotong **1:1** dan potongannya **digeser ke pembicara itu**;
+  - **kamera lebar** (orang-orang berjauhan, atau tidak ada wajah): kembali **16:9 penuh**, semua orang terlihat.
+
+  Posisi potongan tetap selama satu shot (tidak bergoyang), dan pergantian bingkai terjadi tepat di gambar pergantian kamera. Shot yang sangat pendek (di bawah 1,2 detik) tanpa wajah mengikuti shot sebelumnya supaya bingkai tidak berkedip. Setelah render ada keterangan, misalnya "3 bagian, 8 detik 1:1 mengikuti pembicara dan 4 detik 16:9 penuh".
+
+  Butuh pendeteksi wajah OpenCV (unduhan beberapa puluh MB), dipasang otomatis oleh `mulai_windows.bat` (manual: `pip install -r requirements-reframe.txt`). Tanpa OpenCV, pilihan Otomatis menghasilkan 16:9 penuh dan ada pemberitahuan. Batasan: pendeteksi ini mengenali wajah yang menghadap kamera; wajah yang sangat menyamping, sangat kecil, atau gelap bisa tidak terlihat, dan shot itu lalu dibuat 16:9 penuh. Pendeteksi ini tidak tahu siapa yang sedang berbicara; bila dua orang duduk berjauhan dalam satu gambar, hasilnya 16:9 penuh.
+
+Bingkai 1:1 dan Otomatis butuh video sumber yang lebih tajam (misalnya 720p untuk render 720p), jadi kadang ZOI mengunduh ulang sumbernya. Pilihan terakhir diingat browser. Nama file hasil bingkai 1:1 mengandung `_1x1`, bingkai otomatis `_auto`.
 
 ## Pembuka: thumbnail + suara pembaca
 
@@ -160,15 +168,28 @@ Di halaman 3 ada sakelar **Pembuka: thumbnail + suara pembaca**. Bila aktif, kli
 
 - Gambar pembuka itu juga disimpan sebagai **thumbnail JPG**; tombol **Unduh thumbnail** muncul setelah render.
 - Pilih **Suara pria** atau **Suara wanita**.
-- Suara utama: **Microsoft Edge** (Ardi untuk pria, Gadis untuk wanita). Alami, gratis, tanpa API key, tetapi butuh internet saat render. Ini layanan baca-teks milik browser Edge yang dipakai tanpa jalur resmi, jadi suatu saat bisa berhenti bekerja.
+- Bila aplikasi **VoiceStudio** sedang terbuka di laptop, ZOI memakainya lebih dulu (lihat bagian berikut). Bila tidak, dipakai Edge, lalu Piper.
+- Suara **Microsoft Edge** (Ardi untuk pria, Gadis untuk wanita). Alami, gratis, tanpa API key, tetapi butuh internet saat render. Ini layanan baca-teks milik browser Edge yang dipakai tanpa jalur resmi, jadi suatu saat bisa berhenti bekerja.
 - Cadangan otomatis: **Piper**, berjalan di laptop tanpa internet. Piper bahasa Indonesia hanya punya suara wanita; suara pria dibuat dengan menurunkan nadanya, jadi terdengar lebih robotik. Bila cadangan ini terpakai, ada pemberitahuan setelah render. Suara Piper (sekitar 63 MB) diunduh sekali ke folder `models/piper`.
 - Keduanya dipasang otomatis oleh `mulai_windows.bat` (manual: `pip install -r requirements-voice.txt`).
 - Bila tidak ada mesin suara yang terpasang, pembuka tetap dibuat tanpa suara (1,5 detik) dan ada pemberitahuan setelah render.
 - "Rp800.000" dibacakan sebagai "800.000 rupiah". Kecepatan bicara diatur lewat `ZOI_VOICE_SPEED` (bawaan 0.85; lebih kecil = lebih cepat).
+- **Suara pria tidak lagi terlalu berat (bass)**: nada Ardi dinaikkan sedikit (`+10Hz`), dan suara pria (Edge, Piper, maupun VoiceStudio) melewati pengurang bass: dengung di bawah 110 Hz dibuang, bagian "bum" sekitar 160 Hz dikurangi, kejelasan sekitar 3000 Hz ditambah. Di uji kami, bagian suara di bawah 200 Hz turun dari 71% menjadi 50%, dan kalimatnya tetap terbaca benar oleh pengenal suara. Nada pria Piper dinaikkan dari 0,62 menjadi 0,72. Semua bisa diatur: `ZOI_EDGE_PITCH_PRIA`, `ZOI_PIPER_PITCH_PRIA`, `ZOI_VOICE_EQ_PRIA` (`0` = pengurang bass mati).
 
+### Suara VoiceStudio (pilihan tambahan)
+
+[VoiceStudio](https://github.com/debpalash/VoiceStudio) adalah aplikasi suara AI terpisah (gratis, sumber terbuka, berjalan di laptop sendiri, mendukung banyak bahasa termasuk Indonesia, bisa merancang atau meniru suara). ZOI tidak memasangnya; Anda memasang dan membukanya sendiri. Bila sedang terbuka, ZOI memakai API lokalnya di `http://127.0.0.1:3900` (tanpa API key untuk alamat lokal).
+
+1. Pasang VoiceStudio dari halaman [Releases](https://github.com/debpalash/VoiceStudio/releases/latest) (Windows: installer `.exe`).
+2. Di VoiceStudio, buat dua profil suara bernama **pria** dan **wanita** (misalnya lewat desain suara atau dari rekaman suara yang Anda punya izinnya). Nama lain bisa dipakai lewat `ZOI_VOICESTUDIO_PRIA` dan `ZOI_VOICESTUDIO_WANITA`.
+3. Biarkan VoiceStudio terbuka saat merender. Setelah render ada keterangan "Suara pembaca dibuat dengan VoiceStudio".
+
+Bila VoiceStudio tidak terbuka, menolak permintaan, atau gagal, ZOI otomatis kembali ke Edge lalu Piper, dan alasannya ditampilkan setelah render.
+
+Catatan jujur: VoiceStudio memakai model AI yang jauh lebih besar dari Edge atau Piper. Di laptop tanpa kartu grafis kuat (misalnya AMD Radeon R2), membuat suara bisa sangat lambat; pembuatnya tidak menerbitkan angka kecepatan untuk prosesor seperti ini, dan kami belum bisa mengujinya langsung. Coba dulu dengan satu klip.
 ## Blok hook
 
-Di halaman 3 ada sakelar **Blok hook selama video** (Aktif/Mati). Bila aktif, teks hook tampil sepanjang klip, maksimal 3 baris (ukuran huruf mengecil otomatis untuk teks panjang). Pilih gayanya, **Kotak gelap** atau **Kartu kuning**, dan posisinya, **Atas** atau **Tengah**.
+Di halaman 3 ada sakelar **Blok hook selama video (setelah pembuka)** (Aktif/Mati). Bawaannya **Mati**: teks hook hanya tampil di pembuka dan hilang begitu suara pembaca selesai. (Dulu bawaannya Aktif, sehingga kartu kuning tetap tampil sepanjang video; pilihan lama yang tersimpan di browser tidak lagi dipakai.) Bila diaktifkan, teks hook tampil sepanjang klip, maksimal 3 baris (ukuran huruf mengecil otomatis untuk teks panjang). Pilih gayanya, **Kotak gelap** atau **Kartu kuning**, dan posisinya, **Atas** atau **Tengah**.
 
 - Tiap klip punya kotak **Teks blok hook** yang terisi otomatis dari hook hasil analisis; teks yang sama dipakai untuk pembuka. Edit teksnya sesuka Anda sebelum menekan **Render klip ini**.
 - Tanda seperti `[tertawa]` dan emoji dibuang otomatis, karena font biasa tidak punya gambar emoji. Maksimal 150 karakter.
@@ -259,7 +280,15 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_PORT` | `5000` | Port dashboard |
 | `ZOI_RENDER_PRESET` | `veryfast` | `ultrafast` lebih cepat, file lebih besar |
 | `ZOI_RENDER_CRF` | `23` | Lebih kecil = kualitas lebih tinggi |
-| `ZOI_VOICE_ENGINE` | `auto` | `auto` = Edge lalu Piper; `edge` = Edge saja; `piper` = Piper saja (selalu offline) |
+| `ZOI_VOICE_ENGINE` | `auto` | `auto` = VoiceStudio (bila terbuka), lalu Edge, lalu Piper; `voicestudio`, `edge`, atau `piper` = mesin itu saja |
+| `ZOI_EDGE_PITCH_PRIA` | `+10Hz` | Nada suara pria Edge; `+0Hz` = nada asli Ardi |
+| `ZOI_PIPER_PITCH_PRIA` | `0.72` | Nada suara pria Piper (0.5-1.0); lebih kecil = lebih berat |
+| `ZOI_VOICE_EQ_PRIA` | pengurang bass | Filter suara pria (format filter FFmpeg); `0` = mati |
+| `ZOI_VOICESTUDIO_URL` | `http://127.0.0.1:3900` | Alamat API VoiceStudio |
+| `ZOI_VOICESTUDIO_PRIA` / `ZOI_VOICESTUDIO_WANITA` | `pria` / `wanita` | Nama atau ID profil suara di VoiceStudio |
+| `ZOI_VOICESTUDIO_MODEL` | `omnivoice` | Mesin suara di VoiceStudio |
+| `ZOI_VOICESTUDIO_TIMEOUT` | `600` | Batas tunggu VoiceStudio (detik) |
+| `ZOI_OPENCV_REFRAME` | kosong | Isi `1` untuk jalur lama pelacakan wajah per frame (hanya `pipeline.py`, bukan dashboard) |
 | `ZOI_EDGE_RATE` | `+10%` | Kecepatan suara Edge, misalnya `+20%` lebih cepat |
 | `ZOI_VOICE_SPEED` | `0.85` | Kecepatan suara Piper; lebih kecil = lebih cepat |
 | `ZOI_HOOK_FONT` | otomatis | Lokasi file font `.ttf` untuk blok hook |

@@ -58,12 +58,15 @@
   </fieldset>
   <fieldset class="plain" style="margin-top:14px">
     <legend>Bingkai video</legend>
-    <div class="seg" style="grid-template-columns:1fr 1fr">
+    <div class="seg" style="grid-template-columns:1fr 1fr 1fr">
       <label><input class="sr-only" type="radio" name="frame-choice" value="wide" checked><span>16:9 penuh</span></label>
       <label><input class="sr-only" type="radio" name="frame-choice" value="square"><span>1:1 persegi</span></label>
+      <label><input class="sr-only" type="radio" name="frame-choice" value="auto"><span>Otomatis</span></label>
     </div>
   </fieldset>
-  <p class="muted" style="margin:8px 0 0">16:9 menampilkan seluruh gambar. 1:1 memotong sebagian gambar sehingga orangnya tampil lebih besar.</p>
+  <p class="muted" style="margin:8px 0 0">16:9 menampilkan seluruh gambar. 1:1 memotong sebagian gambar sehingga orangnya tampil lebih besar.
+    Otomatis: tiap pergantian kamera diperiksa; bila tampak satu pembicara, potongan 1:1 digeser ke pembicara itu, dan bila kamera lebar (beberapa orang atau tanpa wajah) kembali ke 16:9 penuh.
+    {% if not reframe_ready %}<br><span class="warn" id="reframe-warn">Pendeteksi wajah (OpenCV) belum terpasang, jadi pilihan Otomatis menghasilkan 16:9 penuh. Jalankan ulang mulai_windows.bat untuk memasangnya.</span>{% endif %}</p>
 
   <div id="crop-panel" hidden>
     <label class="field" for="crop-x" style="margin-top:12px">Posisi potongan 1:1</label>
@@ -95,12 +98,13 @@
     {% if not voice_ready %}<br><span class="warn">Suara pembaca belum terpasang, jadi pembuka dibuat tanpa suara. Jalankan ulang mulai_windows.bat untuk memasangnya.</span>{% endif %}</p>
 
   <fieldset class="plain" style="margin-top:14px">
-    <legend>Blok hook selama video</legend>
+    <legend>Blok hook selama video (setelah pembuka)</legend>
     <div class="seg" style="grid-template-columns:1fr 1fr">
-      <label><input class="sr-only" type="radio" name="hook-choice" value="1" checked><span>Aktif</span></label>
-      <label><input class="sr-only" type="radio" name="hook-choice" value="0"><span>Mati</span></label>
+      <label><input class="sr-only" type="radio" name="hook-choice" value="1"><span>Aktif</span></label>
+      <label><input class="sr-only" type="radio" name="hook-choice" value="0" checked><span>Mati</span></label>
     </div>
   </fieldset>
+  <p class="muted" style="margin:8px 0 0" id="hook-note">Mati: teks hook hanya tampil di pembuka dan hilang begitu suara pembaca selesai. Aktif: teks hook tetap tampil sepanjang video.</p>
   <div id="hook-options">
     <div class="seg" style="grid-template-columns:1fr 1fr;margin-top:8px">
       <label><input class="sr-only" type="radio" name="style-choice" value="box" checked><span>Kotak gelap</span></label>
@@ -152,7 +156,7 @@
       <input type="hidden" name="quality" value="{{ default_quality }}" class="quality-field">
       <input type="hidden" name="frame" value="wide" class="frame-field">
       <input type="hidden" name="crop_x" value="50" class="crop-field">
-      <input type="hidden" name="hook_on" value="1" class="hook-field">
+      <input type="hidden" name="hook_on" value="0" class="hook-field">
       <input type="hidden" name="intro_on" value="0" class="intro-field">
       <input type="hidden" name="voice" value="wanita" class="voice-field">
       <input type="hidden" name="hook_style" value="box" class="style-field">
@@ -211,6 +215,10 @@
       <span class="name">
         <a class="title" href="{{ url_for('serve_video', filename=item.filename) }}">{{ item.filename }}</a><br>
         <span class="muted">{{ item.modified }} &middot; {{ item.size_mb }} MB</span>
+        <details class="preview">
+          <summary class="small">Putar pratinjau</summary>
+          <video controls playsinline preload="none" src="{{ url_for('serve_video', filename=item.filename) }}"></video>
+        </details>
       </span>
       <span class="actions">
         <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>
@@ -262,11 +270,14 @@
     var radio = document.querySelector('input[name="quality-choice"]:checked');
     if (!radio) { return; }
     var square = currentFrame() === "square";
-    var source = square ? radio.dataset.sourceSquare : radio.dataset.source;
-    var ready = square ? radio.dataset.readySquare : radio.dataset.ready;
+    // Otomatis bisa memotong 1:1, jadi butuh sumber seperti 1:1.
+    var needsSquare = currentFrame() !== "wide";
+    var source = needsSquare ? radio.dataset.sourceSquare : radio.dataset.source;
+    var ready = needsSquare ? radio.dataset.readySquare : radio.dataset.ready;
     fields.forEach(function (field) { field.value = radio.value; });
     frameFields.forEach(function (field) { field.value = currentFrame(); });
-    var text = "Hasil " + radio.dataset.size + (square ? ", bingkai 1:1. " : ". ");
+    var text = "Hasil " + radio.dataset.size +
+      (square ? ", bingkai 1:1. " : currentFrame() === "auto" ? ", bingkai otomatis. " : ". ");
     if (ready) {
       text += "Video sumber sudah tersimpan, jadi render langsung jalan.";
     } else if (hasSource) {
@@ -380,7 +391,8 @@
   var hookEditors = document.querySelectorAll(".hook-edit");
   var hookOptions = document.getElementById("hook-options");
   var settings = [
-    ["hook-choice", ".hook-field", "zoi-blok-hook"],
+    // Kunci baru: pilihan lama "Aktif" (bawaan dulu) tidak lagi terbawa.
+    ["hook-choice", ".hook-field", "zoi-blok-hook-2"],
     ["intro-choice", ".intro-field", "zoi-pembuka"],
     ["style-choice", ".style-field", "zoi-gaya-hook"],
     ["pos-choice", ".pos-field", "zoi-posisi-hook"],
@@ -392,7 +404,7 @@
       var value = choice(item[0], "");
       document.querySelectorAll(item[1]).forEach(function (field) { field.value = value; });
     });
-    var hookOn = choice("hook-choice", "1") === "1";
+    var hookOn = choice("hook-choice", "0") === "1";
     var introOn = choice("intro-choice", "0") === "1";
     hookOptions.hidden = !hookOn;
     document.getElementById("voice-options").hidden = !introOn;

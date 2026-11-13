@@ -36,6 +36,12 @@ if errorlevel 1 echo Memasang suara pembaca untuk pembuka klip. Sekali saja...
 if errorlevel 1 ".venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r requirements-voice.txt
 if errorlevel 1 echo [!] Suara pembaca gagal dipasang. Pembuka klip dibuat tanpa suara, fitur lain tetap jalan.
 
+rem Pendeteksi wajah untuk bingkai Otomatis. Bila gagal dipasang, fitur lain tetap jalan.
+".venv\Scripts\python.exe" -c "import cv2; cv2.CascadeClassifier" >nul 2>nul
+if errorlevel 1 echo Memasang pendeteksi wajah untuk bingkai Otomatis. Sekali saja...
+if errorlevel 1 ".venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r requirements-reframe.txt
+if errorlevel 1 echo [!] Pendeteksi wajah gagal dipasang. Bingkai Otomatis dibuat 16:9 penuh, fitur lain tetap jalan.
+
 set ZOI_OPEN_BROWSER=1
 ".venv\Scripts\python.exe" app.py
 

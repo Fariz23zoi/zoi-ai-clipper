@@ -42,7 +42,13 @@
   function finish(card, data) {
     var result = card.querySelector(".result");
     if (data.status === "done") {
-      var parts = [link("btn", base + "output/" + encodeURIComponent(data.filename) + "?dl=1", "Unduh video MP4")];
+      // Pratinjau: hasil render bisa ditonton langsung sebelum diunduh.
+      var video = document.createElement("video");
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = "metadata";
+      video.src = base + "output/" + encodeURIComponent(data.filename);
+      var parts = [video, link("btn", base + "output/" + encodeURIComponent(data.filename) + "?dl=1", "Unduh video MP4")];
       if (data.thumbnail) {
         parts.push(link("btn secondary", base + "thumb/" + encodeURIComponent(data.thumbnail) + "?dl=1", "Unduh thumbnail"));
       }

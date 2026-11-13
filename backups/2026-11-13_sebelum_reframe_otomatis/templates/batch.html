@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Render semua - ZOI AI CLIPPER{% endblock %}
+{% block content %}
+<section class="card" aria-live="polite">
+  <h1>Render semua</h1>
+  <p id="summary">Menyiapkan {{ jobs|length }} klip...</p>
+  <div class="bar" id="total-bar"><div></div></div>
+  <p class="muted" style="margin-top:8px">Klip dirender satu per satu. Halaman ini boleh dibiarkan terbuka; Anda juga bisa kembali nanti lewat daftar klip.</p>
+</section>
+
+{% for job_id, title in jobs %}
+<article class="card batch-job" data-job="{{ job_id }}">
+  <h3 style="overflow-wrap:anywhere">{{ loop.index }}. {{ title or 'Klip' }}</h3>
+  <div class="bar"><div></div></div>
+  <p class="small stage" style="margin-top:8px">Menunggu giliran</p>
+  <div class="result"></div>
+</article>
+{% endfor %}
+
+{% if video_id %}
+<a class="btn secondary" style="margin-top:14px" href="{{ url_for('video_page', video_id=video_id) }}">Kembali ke daftar kandidat</a>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var cards = Array.prototype.slice.call(document.querySelectorAll(".batch-job"));
+  var summary = document.getElementById("summary");
+  var totalFill = document.getElementById("total-bar").firstElementChild;
+  var base = "{{ url_for('home') }}";
+  var state = {};
+
+  function link(cls, href, text) {
+    var a = document.createElement("a");
+    a.className = cls;
+    a.href = href;
+    a.textContent = text;
+    a.style.marginTop = "8px";
+    return a;
+  }
+
+  function finish(card, data) {
+    var result = card.querySelector(".result");
+    if (data.status === "done") {
+      var parts = [link("btn", base + "output/" + encodeURIComponent(data.filename) + "?dl=1", "Unduh video MP4")];
+      if (data.thumbnail) {
+        parts.push(link("btn secondary", base + "thumb/" + encodeURIComponent(data.thumbnail) + "?dl=1", "Unduh thumbnail"));
+      }
+      if (data.notice) {
+        var note = document.createElement("p");
+        note.className = "small muted";
+        note.textContent = data.notice;
+        parts.push(note);
+      }
+      result.replaceChildren.apply(result, parts);
+    } else {
+      var box = document.createElement("div");
+      box.className = "alert bad";
+      box.textContent = data.status === "not_found"
+        ? "Proses tidak ditemukan. Aplikasi mungkin baru dijalankan ulang."
+        : "Gagal: " + (data.error || "penyebab tidak diketahui");
+      result.replaceChildren(box);
+    }
+  }
+
+  async function poll() {
+    var done = 0, failed = 0, sum = 0;
+    for (var i = 0; i < cards.length; i++) {
+      var card = cards[i];
+      var id = card.dataset.job;
+      var data = state[id];
+      if (!data || data.status === "running" || data.status === "queued") {
+        try {
+          var response = await fetch(base + "progress/" + id, {cache: "no-store"});
+          data = response.status === 404 ? {status: "not_found", progress: 0} : await response.json();
+          state[id] = data;
+        } catch (error) {
+          continue;
+        }
+        var fill = card.querySelector(".bar").firstElementChild;
+        var progress = typeof data.progress === "number" ? data.progress : 0;
+        fill.style.width = progress + "%";
+        card.querySelector(".stage").textContent =
+          (data.step ? data.step + " · " : "") + (data.stage || "") +
+          (typeof data.progress === "number" && data.status === "running" ? " (" + progress + "%)" : "");
+        if (["done", "error", "not_found"].indexOf(data.status) >= 0) { finish(card, data); }
+      }
+      if (data.status === "done") { done++; sum += 100; }
+      else if (data.status === "error" || data.status === "not_found") { failed++; sum += 100; }
+      else { sum += typeof data.progress === "number" ? data.progress : 0; }
+    }
+    totalFill.style.width = (sum / cards.length) + "%";
+    summary.textContent = done + " dari " + cards.length + " klip selesai" + (failed ? ", " + failed + " gagal" : "");
+    if (done + failed < cards.length) { setTimeout(poll, 1000); }
+  }
+  poll();
+})();
+</script>
+{% endblock %}

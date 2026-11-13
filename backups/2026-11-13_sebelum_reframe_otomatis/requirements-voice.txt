@@ -1,0 +1,7 @@
+# Suara pembaca untuk pembuka klip (opsional, untuk laptop).
+# Dipasang otomatis oleh mulai_windows.bat dan mulai.sh.
+# Manual: pip install -r requirements-voice.txt
+# edge-tts: suara pria/wanita alami Microsoft Edge (butuh internet saat render).
+# piper-tts: suara offline cadangan (sekitar 63 MB diunduh sekali).
+edge-tts>=7.0
+piper-tts>=1.3

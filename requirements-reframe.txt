@@ -1,0 +1,5 @@
+# Bingkai "Otomatis" (ikuti pembicara) di halaman render. Opsional, untuk laptop.
+# Dipasang otomatis oleh mulai_windows.bat dan mulai.sh.
+# Manual: pip install -r requirements-reframe.txt
+# OpenCV 4: pendeteksi wajah Haar (di OpenCV 5 pendeteksi ini dipindah ke paket lain).
+opencv-python-headless>=4.8,<5

@@ -11,16 +11,28 @@ Dua mesin, keduanya tanpa API key dan tanpa biaya:
   Piper hanya satu, suara wanita; versi pria dibuat dengan menurunkan
   nadanya, jadi terdengar lebih robotik.
 
-Bawaan: Edge dulu, lalu Piper bila Edge gagal (ZOI_VOICE_ENGINE=auto).
+Ditambah satu mesin pilihan: VoiceStudio (github.com/debpalash/VoiceStudio),
+aplikasi suara AI terpisah yang berjalan di laptop sendiri. Bila aplikasinya
+sedang terbuka, ZOI memakainya lewat API lokalnya (http://127.0.0.1:3900,
+tanpa API key). Suara pria/wanita diambil dari profil suara VoiceStudio
+bernama "pria" dan "wanita" (bisa diganti lewat ZOI_VOICESTUDIO_PRIA dan
+ZOI_VOICESTUDIO_WANITA). Bila VoiceStudio tidak terbuka atau gagal, ZOI
+kembali ke Edge lalu Piper.
+
+Bawaan: VoiceStudio (bila terbuka), lalu Edge, lalu Piper (ZOI_VOICE_ENGINE=auto).
 Opsional: dipasang lewat requirements-voice.txt.
 """
 import asyncio
 import importlib.util
+import json
 import os
 import re
+import socket
 import subprocess
 import tempfile
 import threading
+import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 
@@ -41,14 +53,51 @@ try:
 except ValueError:
     SPEED = 0.85
 
-# auto = Edge dulu, Piper bila gagal; edge = Edge saja; piper = Piper saja.
+# auto = VoiceStudio (bila terbuka), Edge, lalu Piper;
+# voicestudio / edge / piper = mesin itu saja.
 ENGINE = os.getenv("ZOI_VOICE_ENGINE", "auto").strip().lower() or "auto"
 EDGE_RATE = os.getenv("ZOI_EDGE_RATE", "+10%").strip() or "+10%"
 
 GENDERS = ("pria", "wanita")
 EDGE_VOICES = {"pria": "id-ID-ArdiNeural", "wanita": "id-ID-GadisNeural"}
+# Suara pria Edge sedikit dinaikkan nadanya supaya tidak terlalu berat.
+EDGE_PITCH = {
+    "pria": os.getenv("ZOI_EDGE_PITCH_PRIA", "+10Hz").strip() or "+0Hz",
+    "wanita": os.getenv("ZOI_EDGE_PITCH_WANITA", "+0Hz").strip() or "+0Hz",
+}
 # Piper hanya punya suara wanita; versi pria = nada diturunkan.
-PIPER_PITCH = {"pria": 0.62, "wanita": 1.0}
+# Dulu 0.62 (terdengar terlalu berat/bass); sekarang 0.72.
+try:
+    PIPER_PITCH = {
+        "pria": max(0.5, min(1.0, float(os.getenv("ZOI_PIPER_PITCH_PRIA", "0.72")))),
+        "wanita": 1.0,
+    }
+except ValueError:
+    PIPER_PITCH = {"pria": 0.72, "wanita": 1.0}
+
+# Pengurang bass untuk suara pria: buang dengung rendah, kurangi bagian
+# "bum", tambah sedikit kejelasan. ZOI_VOICE_EQ_PRIA=0 mematikannya.
+MALE_EQ = os.getenv(
+    "ZOI_VOICE_EQ_PRIA",
+    "highpass=f=110,equalizer=f=160:t=q:w=1:g=-4,equalizer=f=3000:t=q:w=1:g=3",
+).strip()
+if MALE_EQ in ("0", "off", "mati"):
+    MALE_EQ = ""
+
+VOICESTUDIO_URL = (
+    os.getenv("ZOI_VOICESTUDIO_URL", "http://127.0.0.1:3900").strip().rstrip("/")
+    or "http://127.0.0.1:3900"
+)
+VOICESTUDIO_MODEL = os.getenv("ZOI_VOICESTUDIO_MODEL", "omnivoice").strip() or "omnivoice"
+VOICESTUDIO_VOICES = {
+    "pria": os.getenv("ZOI_VOICESTUDIO_PRIA", "pria").strip() or "pria",
+    "wanita": os.getenv("ZOI_VOICESTUDIO_WANITA", "wanita").strip() or "wanita",
+}
+try:
+    VOICESTUDIO_TIMEOUT = max(30, int(os.getenv("ZOI_VOICESTUDIO_TIMEOUT", "600")))
+except ValueError:
+    VOICESTUDIO_TIMEOUT = 600
+ENGINE_NAMES = {"voicestudio": "VoiceStudio", "edge": "Edge", "piper": "Piper"}
 
 _LOCK = threading.Lock()
 _VOICE = None
@@ -66,13 +115,27 @@ def edge_available():
     return importlib.util.find_spec("edge_tts") is not None
 
 
+def voicestudio_running(timeout=0.4):
+    """True bila aplikasi VoiceStudio sedang terbuka (port API-nya menjawab)."""
+    parts = urllib.parse.urlsplit(VOICESTUDIO_URL)
+    host = parts.hostname or "127.0.0.1"
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def is_available():
     """True bila setidaknya satu mesin suara terpasang."""
+    if ENGINE == "voicestudio":
+        return voicestudio_running()
     if ENGINE == "edge":
         return edge_available()
     if ENGINE == "piper":
         return piper_available()
-    return edge_available() or piper_available()
+    return edge_available() or piper_available() or voicestudio_running()
 
 
 def speech_text(text):
@@ -162,6 +225,46 @@ def _to_wav(source, target, extra_filter=""):
         )
 
 
+def _voice_filter(gender):
+    return MALE_EQ if gender == "pria" else ""
+
+
+def _voicestudio_synthesize(spoken, wav_path, gender):
+    """Suara VoiceStudio (aplikasi di laptop sendiri) ke WAV.
+
+    Memakai API lokal VoiceStudio yang meniru OpenAI: POST /v1/audio/speech.
+    Alamat lokal tidak butuh API key, dan tidak lewat proxy internet.
+    """
+    body = json.dumps({
+        "model": VOICESTUDIO_MODEL,
+        "input": spoken,
+        "voice": VOICESTUDIO_VOICES[gender],
+        "response_format": "wav",
+        "language": "id",
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        VOICESTUDIO_URL + "/v1/audio/speech", data=body,
+        headers={"Content-Type": "application/json"}, method="POST"
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with tempfile.TemporaryDirectory(prefix="zoi_voice_") as folder:
+        raw = os.path.join(folder, "voicestudio.wav")
+        try:
+            with opener.open(request, timeout=VOICESTUDIO_TIMEOUT) as response, \
+                    open(raw, "wb") as file:
+                while True:
+                    chunk = response.read(1 << 16)
+                    if not chunk:
+                        break
+                    file.write(chunk)
+        except urllib.error.HTTPError as error:
+            detail = error.read(400).decode("utf-8", errors="replace")
+            raise RuntimeError(f"VoiceStudio menolak permintaan ({error.code}): {detail}") from error
+        if not os.path.getsize(raw):
+            raise RuntimeError("VoiceStudio tidak mengirim suara.")
+        _to_wav(raw, wav_path, _voice_filter(gender))
+
+
 def _edge_synthesize(spoken, wav_path, gender):
     """Suara Edge (butuh internet) ke WAV."""
     import edge_tts
@@ -172,13 +275,14 @@ def _edge_synthesize(spoken, wav_path, gender):
 
         async def run():
             await edge_tts.Communicate(
-                spoken, EDGE_VOICES[gender], rate=EDGE_RATE, proxy=proxy
+                spoken, EDGE_VOICES[gender], rate=EDGE_RATE,
+                pitch=EDGE_PITCH[gender], proxy=proxy
             ).save(mp3)
 
         asyncio.run(asyncio.wait_for(run(), timeout=60))
         if not os.path.isfile(mp3) or not os.path.getsize(mp3):
             raise RuntimeError("Layanan suara Edge tidak mengirim suara.")
-        _to_wav(mp3, wav_path)
+        _to_wav(mp3, wav_path, _voice_filter(gender))
 
 
 def _piper_synthesize(spoken, wav_path, gender, report, voice=None):
@@ -199,10 +303,12 @@ def _piper_synthesize(spoken, wav_path, gender, report, voice=None):
             voice.synthesize_wav(spoken, file, syn_config=config)
         if pitch != 1.0:
             rate = _wav_rate(raw_path)
-            _to_wav(raw_path, wav_path, (
+            shift = (
                 f"asetrate={int(rate * pitch)},aresample={rate},"
                 f"atempo={1 / pitch:.4f}"
-            ))
+            )
+            extra = _voice_filter(gender)
+            _to_wav(raw_path, wav_path, shift + ("," + extra if extra else ""))
     finally:
         if raw_path != wav_path and os.path.exists(raw_path):
             os.remove(raw_path)
@@ -211,8 +317,9 @@ def _piper_synthesize(spoken, wav_path, gender, report, voice=None):
 def synthesize_voice(text, wav_path, gender="wanita", report=None, voice=None):
     """Bacakan `text` ke file WAV dengan suara pria atau wanita.
 
-    Mengembalikan {"seconds", "engine", "note"}. `engine` adalah "edge"
-    atau "piper"; `note` menjelaskan bila Edge gagal lalu dipakai Piper.
+    Mengembalikan {"seconds", "engine", "note"}. `engine` adalah
+    "voicestudio", "edge" atau "piper"; `note` menjelaskan mesin yang
+    dipakai bila bukan yang pertama dicoba.
     `voice` (objek Piper) memaksa Piper, dipakai untuk uji.
     """
     report = report or _ignore
@@ -225,20 +332,42 @@ def synthesize_voice(text, wav_path, gender="wanita", report=None, voice=None):
 
     note = ""
     with _LOCK:
+        use_studio = voice is None and (
+            ENGINE == "voicestudio" or (ENGINE == "auto" and voicestudio_running())
+        )
+        if use_studio:
+            report("Membuat suara pembaca (VoiceStudio di laptop ini)", None)
+            try:
+                _voicestudio_synthesize(spoken, wav_path, gender)
+                return {
+                    "seconds": _wav_seconds(wav_path), "engine": "voicestudio",
+                    "note": "Suara pembaca dibuat dengan VoiceStudio.",
+                }
+            except Exception as error:
+                if ENGINE == "voicestudio":
+                    raise RuntimeError(
+                        "Suara VoiceStudio gagal dibuat. Pastikan aplikasi VoiceStudio "
+                        f"terbuka. Keterangan: {str(error)[:300]}"
+                    ) from error
+                note = (
+                    "VoiceStudio gagal membuat suara "
+                    f"({str(error)[:160]}), jadi dipakai mesin suara lain. "
+                )
+
         use_edge = voice is None and ENGINE in ("auto", "edge") and edge_available()
 
         if use_edge:
             report("Membuat suara pembaca (Edge)", None)
             try:
                 _edge_synthesize(spoken, wav_path, gender)
-                return {"seconds": _wav_seconds(wav_path), "engine": "edge", "note": ""}
+                return {"seconds": _wav_seconds(wav_path), "engine": "edge", "note": note.strip()}
             except Exception as error:
                 if ENGINE == "edge" or not piper_available():
                     raise RuntimeError(
                         "Suara pembaca Edge gagal dibuat (butuh internet). "
                         f"Keterangan: {str(error)[:200]}"
                     ) from error
-                note = (
+                note += (
                     "Suara Edge gagal dibuat (mungkin tidak ada internet), "
                     "jadi dipakai suara offline Piper."
                 )
@@ -250,7 +379,7 @@ def synthesize_voice(text, wav_path, gender="wanita", report=None, voice=None):
 
         _piper_synthesize(spoken, wav_path, gender, report, voice=voice)
 
-    return {"seconds": _wav_seconds(wav_path), "engine": "piper", "note": note}
+    return {"seconds": _wav_seconds(wav_path), "engine": "piper", "note": note.strip()}
 
 
 def synthesize(text, wav_path, report=None, voice=None, gender="wanita"):

@@ -78,6 +78,10 @@
       <span class="name">
         <a class="title" href="{{ url_for('serve_video', filename=item.filename) }}">{{ item.filename }}</a><br>
         <span class="muted">{{ item.modified }} &middot; {{ item.size_mb }} MB</span>
+        <details class="preview">
+          <summary class="small">Putar pratinjau</summary>
+          <video controls playsinline preload="none" src="{{ url_for('serve_video', filename=item.filename) }}"></video>
+        </details>
       </span>
       <span class="actions">
         <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>

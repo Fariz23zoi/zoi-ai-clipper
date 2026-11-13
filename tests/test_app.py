@@ -692,7 +692,9 @@ class DashboardTest(unittest.TestCase):
 
     def test_47b_hook_editor_and_crop_controls_on_page(self):
         html = self.page()
-        self.assertIn('name="hook-choice" value="1" checked', html)
+        # Bawaan Mati: teks hook hilang setelah suara pembuka selesai.
+        self.assertIn('name="hook-choice" value="0" checked', html)
+        self.assertIn('name="hook_on" value="0" class="hook-field"', html)
         self.assertEqual(html.count('name="hook_text"'), html.count("Render klip ini"))
         self.assertEqual(html.count('class="hook-field"'), html.count("Render klip ini"))
         self.assertEqual(html.count('class="crop-field"'), html.count("Render klip ini"))

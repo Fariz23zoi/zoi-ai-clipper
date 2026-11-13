@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+{% if error %}<div class="alert bad" role="alert">{{ error }}</div>{% endif %}
+{% if message %}<div class="alert ok" role="status">{{ message }}</div>{% endif %}
+
+<form class="card" method="POST" action="{{ url_for('analyze') }}">
+  <p class="step">Langkah 1 &middot; Tempel link</p>
+  <h1>Buat video Shorts</h1>
+  <p class="muted">Tempel link YouTube. Video harus memiliki subtitle/CC bahasa Indonesia atau Inggris.
+    Analisis hanya mengambil subtitle; video baru diunduh saat Anda merender klip.</p>
+
+  <label class="field" for="youtube_url">Link YouTube</label>
+  <input type="url" id="youtube_url" name="youtube_url" inputmode="url" autocomplete="off"
+         placeholder="https://www.youtube.com/watch?v=..." required>
+
+  <fieldset class="modes" style="margin-top:16px">
+    <legend>Mode analisis</legend>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="zoi" checked>
+      <span class="body"><strong>ZOI</strong><small>Analisis lokal, langsung ke daftar klip</small></span>
+    </label>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="claude">
+      <span class="body"><strong>Claude</strong>
+        <small>{% if keys.claude %}Analisis Claude lewat API{% else %}Salin prompt ke Claude, tempel jawabannya{% endif %}</small></span>
+    </label>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="chatgpt">
+      <span class="body"><strong>ChatGPT</strong>
+        <small>{% if keys.chatgpt %}Analisis ChatGPT lewat API{% else %}Salin prompt ke ChatGPT, tempel jawabannya{% endif %}</small></span>
+    </label>
+    <label class="mode">
+      <input class="sr-only" type="radio" name="mode" value="hybrid">
+      <span class="body"><strong>Hybrid</strong><small>Claude dan ChatGPT sekaligus</small></span>
+    </label>
+  </fieldset>
+
+  <p class="muted" style="margin:12px 0 0">{% if not keys.claude and not keys.chatgpt %}Mode Claude, ChatGPT, dan Hybrid berjalan tanpa API key. {% endif %}Kualitas render dipilih di langkah terakhir.</p>
+
+  <button class="btn" type="submit" style="margin-top:12px">Analisis video</button>
+</form>
+
+<section class="card">
+  <h2>Video tanpa subtitle terlalu lama?</h2>
+  <p class="muted">Buat transkripnya gratis di Google Colab (memakai GPU Google), lalu impor ke ZOI.</p>
+  <a class="btn secondary" href="{{ url_for('transkrip_page') }}">Transkrip lewat Google Colab</a>
+</section>
+
+<section class="card">
+  <h2>Klip film</h2>
+  <p class="muted">Punya film dan file subtitle .srt? Tempel link film atau pilih file di laptop, lalu ZOI mencari momen terbaiknya.</p>
+  <a class="btn secondary" href="{{ url_for('film_page') }}">Klip film dengan file .srt</a>
+</section>
+
+{% if videos %}
+<section class="card">
+  <h2>Video yang sudah dianalisis</h2>
+  <ul class="list">
+  {% for item in videos %}
+    <li>
+      <span class="name">
+        <a class="title" href="{{ url_for('video_page', video_id=item.video_id) }}">{{ item.title }}</a><br>
+        <span class="muted">{{ item.duration|hms }} &middot; {{ item.candidate_count }} kandidat{% if item.source_mb %} &middot; sumber {{ item.source_mb }} MB{% endif %}</span>
+      </span>
+      <a class="btn secondary inline" href="{{ url_for('video_page', video_id=item.video_id) }}">Buka</a>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if renders %}
+<section class="card">
+  <h2>Hasil render terbaru</h2>
+  <ul class="list">
+  {% for item in renders %}
+    <li>
+      <span class="name">
+        <a class="title" href="{{ url_for('serve_video', filename=item.filename) }}">{{ item.filename }}</a><br>
+        <span class="muted">{{ item.modified }} &middot; {{ item.size_mb }} MB</span>
+      </span>
+      <span class="actions">
+        <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>
+        <form method="POST" action="{{ url_for('delete_clip') }}"
+              data-confirm="Hapus klip {{ item.filename }}? File tidak bisa dikembalikan."
+              onsubmit="return confirm(this.dataset.confirm)">
+          <input type="hidden" name="filename" value="{{ item.filename }}">
+          <button class="btn danger inline" type="submit">Hapus</button>
+        </form>
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if storage.sources_mb or storage.renders_mb %}
+<section class="card">
+  <h2>Penyimpanan terpakai</h2>
+  <p>Video sumber {{ storage.sources_mb }} MB &middot; hasil render {{ storage.renders_mb }} MB</p>
+  <p class="muted">Untuk mengosongkan ruang, buka salah satu video di atas lalu tekan Hapus video sumber.
+    Kandidatnya tetap tersimpan, dan video diunduh lagi bila Anda merender.</p>
+</section>
+{% endif %}
+
+{% if has_history or renders %}
+<form class="card" method="POST" action="{{ url_for('clear_history') }}"
+      data-confirm="Hapus semua riwayat? Analisis, transkrip, hasil impor Claude/ChatGPT, dan video sumber akan dihapus. Tidak bisa dikembalikan."
+      onsubmit="return confirm(this.dataset.confirm)">
+  <h2>Hapus semua riwayat</h2>
+  <p class="muted">Mulai bersih: semua analisis, transkrip, hasil impor Claude/ChatGPT, dan video sumber dihapus.
+    File film di laptop dan pengaturan aplikasi tidak disentuh.</p>
+  <label class="small" style="display:flex;gap:8px;align-items:center;margin:8px 0 12px">
+    <input type="checkbox" name="renders" value="1"> Hapus juga semua klip hasil render dan thumbnail
+  </label>
+  <button class="btn danger" type="submit">Hapus semua riwayat</button>
+</form>
+{% endif %}
+{% endblock %}

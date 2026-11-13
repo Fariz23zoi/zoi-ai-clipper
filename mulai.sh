@@ -33,6 +33,11 @@ if [ -z "${TERMUX_VERSION:-}" ] && [ "${ZOI_SPEECH:-1}" != "0" ]; then
     .venv/bin/python -m pip install -q --disable-pip-version-check -r requirements-voice.txt \
       || echo "[!] Suara pembaca gagal dipasang. Pembuka klip dibuat tanpa suara, fitur lain tetap jalan."
   fi
+  if ! .venv/bin/python -c "import cv2; cv2.CascadeClassifier" >/dev/null 2>&1; then
+    echo "Memasang pendeteksi wajah untuk bingkai Otomatis. Sekali saja..."
+    .venv/bin/python -m pip install -q --disable-pip-version-check -r requirements-reframe.txt \
+      || echo "[!] Pendeteksi wajah gagal dipasang. Bingkai Otomatis dibuat 16:9 penuh, fitur lain tetap jalan."
+  fi
 fi
 
 export ZOI_OPEN_BROWSER="${ZOI_OPEN_BROWSER-1}"

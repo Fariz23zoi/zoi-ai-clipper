@@ -1,0 +1,412 @@
+{% extends "base.html" %}
+{% block title %}{{ video.title }} - ZOI AI CLIPPER{% endblock %}
+{% set chosen = qualities|selectattr('id', 'equalto', default_quality)|first %}
+{% block content %}
+<section class="card">
+  <p class="step">{% if video.mode != 'zoi' %}Langkah 3 dari 3{% else %}Langkah 2 dari 2{% endif %} &middot; Pilih klip untuk dirender</p>
+  <h1 style="overflow-wrap:anywhere">{{ video.title }}</h1>
+  <div class="meta">
+    <span class="chip">Durasi {{ video.duration|hms }}</span>
+    {% if video.language %}<span class="chip">Subtitle {{ video.language }}</span>{% endif %}
+    <span class="chip">Mode {{ video.mode|upper }}</span>
+  </div>
+  {% if source_is_local %}
+  <p class="small" style="margin:10px 0 0;overflow-wrap:anywhere">Memakai file film di laptop: {{ video.local_path }} ({{ source_mb }} MB).</p>
+  {% elif source_ready %}
+  <div class="source">
+    <span class="small">Video sumber tersimpan di HP ({{ source_mb }} MB).</span>
+    <form method="POST" action="{{ url_for('delete_source', video_id=video.video_id) }}"
+          data-confirm="Hapus video sumber ({{ source_mb }} MB)? Kandidat tetap tersimpan. Video diunduh lagi bila Anda merender."
+          onsubmit="return confirm(this.dataset.confirm)">
+      <button class="btn danger inline" type="submit">Hapus video sumber</button>
+    </form>
+  </div>
+  {% elif not can_render %}
+  <p class="warn">Alamat video tidak tersimpan. Analisis ulang dari halaman utama sebelum merender.</p>
+  {% endif %}
+</section>
+
+{% if page_error %}<div class="alert bad" role="alert">{{ page_error }}</div>{% endif %}
+{% if deleted == 'sumber' %}<div class="alert ok" role="status">Video sumber dihapus. Kandidat tetap tersimpan.</div>{% endif %}
+{% if deleted == 'klip' %}<div class="alert ok" role="status">Klip dihapus.</div>{% endif %}
+{% if imported %}
+<div class="alert ok" role="status">Kandidat dari {{ imported }} berhasil diimpor dan divalidasi.</div>
+{% endif %}
+{% for notice in video.notices %}
+<div class="alert info">{{ notice }}</div>
+{% endfor %}
+{% if video.mode != 'zoi' and not has_ai %}
+<div class="alert info">Belum ada hasil analisis {{ ai_names }} untuk video ini. Kandidat di bawah berasal dari ZOI Engine.
+  <a class="btn inline" style="margin-top:10px" href="{{ url_for('ai_page', video_id=video.video_id) }}">Impor analisis {{ ai_names }}</a>
+</div>
+{% endif %}
+
+<section class="card">
+  <fieldset class="plain">
+    <legend>Kualitas render</legend>
+    <div class="seg" id="quality">
+      {% for item in qualities %}
+      <label>
+        <input class="sr-only" type="radio" name="quality-choice" value="{{ item.id }}"
+               data-size="{{ item.size }}" data-source="{{ item.source }}" data-ready="{{ '1' if item.ready else '' }}"
+               data-source-square="{{ item.source_square }}" data-ready-square="{{ '1' if item.ready_square else '' }}"
+               {% if item.id == default_quality %}checked{% endif %}>
+        <span>{{ item.id }}p</span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <fieldset class="plain" style="margin-top:14px">
+    <legend>Bingkai video</legend>
+    <div class="seg" style="grid-template-columns:1fr 1fr">
+      <label><input class="sr-only" type="radio" name="frame-choice" value="wide" checked><span>16:9 penuh</span></label>
+      <label><input class="sr-only" type="radio" name="frame-choice" value="square"><span>1:1 persegi</span></label>
+    </div>
+  </fieldset>
+  <p class="muted" style="margin:8px 0 0">16:9 menampilkan seluruh gambar. 1:1 memotong sebagian gambar sehingga orangnya tampil lebih besar.</p>
+
+  <div id="crop-panel" hidden>
+    <label class="field" for="crop-x" style="margin-top:12px">Posisi potongan 1:1</label>
+    <input type="range" id="crop-x" min="0" max="100" step="5" value="50">
+    <div class="range-labels"><span>Kiri</span><span id="crop-value">Tengah</span><span>Kanan</span></div>
+    {% if source_ready %}
+    <div class="crop-preview" id="crop-preview">
+      <img src="{{ url_for('video_preview', video_id=video.video_id) }}" alt="Pratinjau bagian video yang dipakai" id="crop-image">
+      <div class="crop-box" id="crop-box"></div>
+    </div>
+    <p class="muted" style="margin:6px 0 0">Kotak terang = bagian yang tampil di klip.</p>
+    {% else %}
+    <p class="muted" style="margin:6px 0 0">Pratinjau muncul setelah video sumber terunduh (setelah render pertama).</p>
+    {% endif %}
+  </div>
+
+  <fieldset class="plain" style="margin-top:14px">
+    <legend>Pembuka: thumbnail + suara pembaca</legend>
+    <div class="seg" style="grid-template-columns:1fr 1fr">
+      <label><input class="sr-only" type="radio" name="intro-choice" value="1"><span>Aktif</span></label>
+      <label><input class="sr-only" type="radio" name="intro-choice" value="0" checked><span>Mati</span></label>
+    </div>
+  </fieldset>
+  <div class="seg" id="voice-options" style="grid-template-columns:1fr 1fr;margin-top:8px">
+    <label><input class="sr-only" type="radio" name="voice-choice" value="pria"><span>Suara pria</span></label>
+    <label><input class="sr-only" type="radio" name="voice-choice" value="wanita" checked><span>Suara wanita</span></label>
+  </div>
+  <p class="muted" style="margin:8px 0 0">Klip diawali gambar diam dengan kartu hook kuning di tengah sambil hook dibacakan, lalu konten dimulai. Gambar itu juga disimpan sebagai thumbnail.
+    {% if not voice_ready %}<br><span class="warn">Suara pembaca belum terpasang, jadi pembuka dibuat tanpa suara. Jalankan ulang mulai_windows.bat untuk memasangnya.</span>{% endif %}</p>
+
+  <fieldset class="plain" style="margin-top:14px">
+    <legend>Blok hook selama video</legend>
+    <div class="seg" style="grid-template-columns:1fr 1fr">
+      <label><input class="sr-only" type="radio" name="hook-choice" value="1" checked><span>Aktif</span></label>
+      <label><input class="sr-only" type="radio" name="hook-choice" value="0"><span>Mati</span></label>
+    </div>
+  </fieldset>
+  <div id="hook-options">
+    <div class="seg" style="grid-template-columns:1fr 1fr;margin-top:8px">
+      <label><input class="sr-only" type="radio" name="style-choice" value="box" checked><span>Kotak gelap</span></label>
+      <label><input class="sr-only" type="radio" name="style-choice" value="card"><span>Kartu kuning</span></label>
+    </div>
+    <div class="seg" style="grid-template-columns:1fr 1fr;margin-top:8px">
+      <label><input class="sr-only" type="radio" name="pos-choice" value="top" checked><span>Atas</span></label>
+      <label><input class="sr-only" type="radio" name="pos-choice" value="middle"><span>Tengah</span></label>
+    </div>
+  </div>
+  <p class="muted" style="margin:8px 0 0">Teks hook terisi otomatis dari hasil analisis dan bisa diedit di tiap klip sebelum dirender. Teks yang sama dipakai untuk pembuka.</p>
+  <p class="muted" id="quality-note" style="margin:10px 0 0">Hasil {{ chosen.size }}.
+    {% if chosen.ready %}Video sumber sudah tersimpan, jadi render langsung jalan.
+    {% elif source_ready %}Video sumber diunduh ulang pada kualitas {{ chosen.source }}p saat render.
+    {% else %}Video sumber {{ chosen.source }}p diunduh saat render pertama.{% endif %}</p>
+  <p class="muted" style="margin:6px 0 0">Makin tinggi kualitasnya, makin lama unduhan dan render. Pilihan ini berlaku untuk semua tombol Render di bawah.</p>
+</section>
+
+{% for group in groups %}
+<details class="card" {% if loop.first or group.kind != 'zoi' %}open{% endif %}>
+  <summary><span>{{ group.name }} <span class="muted">({{ group.clips|length }})</span></span></summary>
+
+  {% for warning in group.file_warnings %}
+  <p class="warn">{{ warning }}</p>
+  {% endfor %}
+
+  {% if not group.clips %}
+  <p class="muted" style="margin-top:10px">Tidak ada kandidat dari analis ini.</p>
+  {% endif %}
+
+  {% for clip in group.clips %}
+  <article class="clip">
+    <h3 style="overflow-wrap:anywhere">{{ loop.index }}. {{ clip.title }}</h3>
+    <div class="meta">
+      <span class="chip">{{ clip.start_time|hms }} &ndash; {{ clip.end_time|hms }}</span>
+      <span class="chip">{{ clip.duration|round|int }} detik</span>
+      <span class="chip score">Skor {{ clip.score }}/100</span>
+      {% if clip.agrees_with_zoi %}<span class="chip agree">Juga dipilih ZOI</span>{% endif %}
+    </div>
+    {% if clip.hook_sentence %}<p class="hook"><span class="muted">Hook</span><br>{{ clip.hook_sentence }}</p>{% endif %}
+    {% if clip.virality_reason %}<p class="small"><span class="muted">Alasan:</span> {{ clip.virality_reason }}</p>{% endif %}
+    {% for warning in clip.warnings %}<p class="warn">{{ warning }}</p>{% endfor %}
+    <form method="POST" action="{{ url_for('select') }}" style="margin-top:10px">
+      <input type="hidden" name="video_id" value="{{ video.video_id }}">
+      <input type="hidden" name="title" value="{{ clip.title }}">
+      <input type="hidden" name="analyst" value="{{ group.name }}">
+      <input type="hidden" name="start_time" value="{{ clip.start_time }}">
+      <input type="hidden" name="end_time" value="{{ clip.end_time }}">
+      <input type="hidden" name="quality" value="{{ default_quality }}" class="quality-field">
+      <input type="hidden" name="frame" value="wide" class="frame-field">
+      <input type="hidden" name="crop_x" value="50" class="crop-field">
+      <input type="hidden" name="hook_on" value="1" class="hook-field">
+      <input type="hidden" name="intro_on" value="0" class="intro-field">
+      <input type="hidden" name="voice" value="wanita" class="voice-field">
+      <input type="hidden" name="hook_style" value="box" class="style-field">
+      <input type="hidden" name="hook_pos" value="top" class="pos-field">
+      <div class="hook-edit">
+        <label class="field" for="hook-{{ group.name|replace(' ', '')|replace('(', '')|replace(')', '')|replace('.', '') }}-{{ loop.index }}">Teks blok hook</label>
+        <textarea id="hook-{{ group.name|replace(' ', '')|replace('(', '')|replace(')', '')|replace('.', '') }}-{{ loop.index }}" name="hook_text" maxlength="150"
+                  spellcheck="false">{{ clip|hook_default }}</textarea>
+      </div>
+      <button class="btn" type="submit" style="margin-top:10px" {% if not can_render %}disabled{% endif %}>Render klip ini</button>
+    </form>
+  </article>
+  {% endfor %}
+
+  {% if group.clips|length > 1 and can_render %}
+  <button class="btn secondary render-all" type="button" style="margin-top:12px"
+          data-count="{{ group.clips|length }}">Render semua ({{ group.clips|length }} klip)</button>
+  <p class="small render-all-status" role="status" style="margin:6px 0 0"></p>
+  {% endif %}
+
+  {% if group.rejected %}
+  <details>
+    <summary><span class="small">{{ group.rejected|length }} kandidat ditolak validasi</span></summary>
+    <ul class="small muted" style="padding-left:18px;margin:0">
+      {% for item in group.rejected %}<li>#{{ item.index }} {{ item.title }}: {{ item.reason }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
+
+  {% if group.kind == 'import' %}
+  <form method="POST" action="{{ url_for('delete_group', video_id=video.video_id) }}" style="margin-top:12px">
+    <input type="hidden" name="name" value="{{ group.name }}">
+    <button class="btn secondary inline" type="submit">Hapus hasil impor ini</button>
+  </form>
+  {% endif %}
+</details>
+{% endfor %}
+
+{% if groups|length > 1 %}
+<p class="muted" style="margin-top:12px">Skor tiap analis memakai skala sendiri, jadi jangan dibandingkan antar-kelompok.</p>
+{% endif %}
+
+<section class="card">
+  <h2>Analisis {{ ai_names }}</h2>
+  <p class="muted">{% if has_ai %}Ingin mengganti atau menambah hasil analisis AI?{% else %}Minta {{ ai_names }} memilih klip dari video ini, tanpa API key.{% endif %}</p>
+  <a class="btn secondary" href="{{ url_for('ai_page', video_id=video.video_id) }}">
+    {% if has_ai %}Impor ulang analisis AI{% else %}Analisis dengan {{ ai_names }}{% endif %}</a>
+</section>
+
+{% if renders %}
+<section class="card">
+  <h2>Klip yang sudah dirender dari video ini</h2>
+  <ul class="list">
+  {% for item in renders %}
+    <li>
+      <span class="name">
+        <a class="title" href="{{ url_for('serve_video', filename=item.filename) }}">{{ item.filename }}</a><br>
+        <span class="muted">{{ item.modified }} &middot; {{ item.size_mb }} MB</span>
+      </span>
+      <span class="actions">
+        <a class="btn secondary inline" href="{{ url_for('serve_video', filename=item.filename, dl=1) }}">Unduh</a>
+        <form method="POST" action="{{ url_for('delete_clip') }}"
+              data-confirm="Hapus klip {{ item.filename }}? File tidak bisa dikembalikan."
+              onsubmit="return confirm(this.dataset.confirm)">
+          <input type="hidden" name="filename" value="{{ item.filename }}">
+          <input type="hidden" name="video_id" value="{{ video.video_id }}">
+          <button class="btn danger inline" type="submit">Hapus</button>
+        </form>
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<form class="card" method="POST" action="{{ url_for('delete_video', video_id=video.video_id) }}"
+      data-confirm="Hapus video ini dari riwayat? Analisis, transkrip, hasil impor, dan video sumbernya akan dihapus."
+      onsubmit="return confirm(this.dataset.confirm)">
+  <h2>Hapus video ini dari riwayat</h2>
+  <p class="muted">Untuk menganalisis ulang link ini dari nol. Transkrip dan hasil impor Claude/ChatGPT yang lama ikut terhapus.</p>
+  <label class="small" style="display:flex;gap:8px;align-items:center;margin:8px 0 12px">
+    <input type="checkbox" name="renders" value="1"> Hapus juga klip hasil render dari video ini
+  </label>
+  <button class="btn danger" type="submit">Hapus video ini</button>
+</form>
+
+<a class="btn secondary" style="margin-top:14px" href="{{ url_for('home') }}">Analisis video lain</a>
+{% endblock %}
+{% block scripts %}
+<script>
+(function () {
+  var radios = document.querySelectorAll('input[name="quality-choice"]');
+  var frames = document.querySelectorAll('input[name="frame-choice"]');
+  var fields = document.querySelectorAll(".quality-field");
+  var frameFields = document.querySelectorAll(".frame-field");
+  var note = document.getElementById("quality-note");
+  var hasSource = {{ 'true' if source_ready else 'false' }};
+  var KEY = "zoi-kualitas-render";
+  var FRAME_KEY = "zoi-bingkai";
+
+  function currentFrame() {
+    var checked = document.querySelector('input[name="frame-choice"]:checked');
+    return checked ? checked.value : "wide";
+  }
+
+  function apply() {
+    var radio = document.querySelector('input[name="quality-choice"]:checked');
+    if (!radio) { return; }
+    var square = currentFrame() === "square";
+    var source = square ? radio.dataset.sourceSquare : radio.dataset.source;
+    var ready = square ? radio.dataset.readySquare : radio.dataset.ready;
+    fields.forEach(function (field) { field.value = radio.value; });
+    frameFields.forEach(function (field) { field.value = currentFrame(); });
+    var text = "Hasil " + radio.dataset.size + (square ? ", bingkai 1:1. " : ". ");
+    if (ready) {
+      text += "Video sumber sudah tersimpan, jadi render langsung jalan.";
+    } else if (hasSource) {
+      text += "Video sumber diunduh ulang pada kualitas " + source + "p saat render.";
+    } else {
+      text += "Video sumber " + source + "p diunduh saat render pertama.";
+    }
+    note.textContent = text;
+  }
+
+  function remember(key, value) {
+    try { window.localStorage.setItem(key, value); } catch (error) { /* tanpa penyimpanan */ }
+  }
+
+  function recall(key) {
+    try { return window.localStorage.getItem(key); } catch (error) { return null; }
+  }
+
+  var saved = recall(KEY);
+  radios.forEach(function (radio) {
+    if (saved && radio.value === saved) { radio.checked = true; }
+    radio.addEventListener("change", function () { apply(); remember(KEY, radio.value); });
+  });
+
+  var savedFrame = recall(FRAME_KEY);
+  frames.forEach(function (radio) {
+    if (savedFrame && radio.value === savedFrame) { radio.checked = true; }
+    radio.addEventListener("change", function () { apply(); remember(FRAME_KEY, radio.value); });
+  });
+
+  apply();
+
+  // ---- posisi potongan 1:1
+  var cropPanel = document.getElementById("crop-panel");
+  var cropInput = document.getElementById("crop-x");
+  var cropValue = document.getElementById("crop-value");
+  var cropBox = document.getElementById("crop-box");
+  var cropImage = document.getElementById("crop-image");
+  var cropFields = document.querySelectorAll(".crop-field");
+  var CROP_KEY = "zoi-posisi-potong-{{ video.video_id }}";
+
+  function drawCrop() {
+    var value = Number(cropInput.value);
+    cropFields.forEach(function (field) { field.value = value; });
+    cropValue.textContent = value === 50 ? "Tengah" : (value < 50 ? "Kiri " : "Kanan ") + value + "%";
+    if (cropBox && cropImage && cropImage.naturalWidth) {
+      var w = cropImage.naturalWidth, h = cropImage.naturalHeight;
+      var side = Math.min(w, h) / w * 100;
+      cropBox.style.width = side + "%";
+      cropBox.style.left = ((100 - side) * value / 100) + "%";
+    }
+  }
+
+  function showCropPanel() { cropPanel.hidden = currentFrame() !== "square"; drawCrop(); }
+
+  var savedCrop = recall(CROP_KEY);
+  if (savedCrop !== null) { cropInput.value = savedCrop; }
+  cropInput.addEventListener("input", function () { drawCrop(); remember(CROP_KEY, cropInput.value); });
+  if (cropImage) {
+    cropImage.addEventListener("load", drawCrop);
+    cropImage.addEventListener("error", function () { document.getElementById("crop-preview").hidden = true; });
+  }
+  frames.forEach(function (radio) { radio.addEventListener("change", showCropPanel); });
+  showCropPanel();
+
+  // ---- render semua
+  document.querySelectorAll(".render-all").forEach(function (button) {
+    button.addEventListener("click", async function () {
+      var group = button.closest("details");
+      var status = group.querySelector(".render-all-status");
+      var forms = group.querySelectorAll('form[action$="/select"]');
+      if (!window.confirm("Render " + forms.length + " klip dengan pengaturan di atas? Klip dirender satu per satu.")) {
+        return;
+      }
+      var clips = [];
+      forms.forEach(function (form) {
+        var data = {};
+        new FormData(form).forEach(function (value, key) { data[key] = value; });
+        clips.push(data);
+      });
+      button.disabled = true;
+      status.textContent = "Memasukkan " + clips.length + " klip ke antrean...";
+      try {
+        var response = await fetch("{{ url_for('render_batch') }}", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(clips)
+        });
+        var data = await response.json();
+        if (!data.jobs || !data.jobs.length) {
+          var reason = (data.errors && data.errors[0] && data.errors[0].error) || data.error || "Tidak ada klip yang bisa dirender.";
+          throw new Error(reason);
+        }
+        var params = new URLSearchParams();
+        params.set("jobs", data.jobs.map(function (job) { return job.job_id; }).join(","));
+        params.set("video", "{{ video.video_id }}");
+        data.jobs.forEach(function (job) { params.append("t", job.title); });
+        window.location.href = "{{ url_for('render_batch_view') }}?" + params.toString();
+      } catch (error) {
+        status.textContent = "Gagal: " + error.message;
+        button.disabled = false;
+      }
+    });
+  });
+
+  // ---- blok hook dan pembuka
+  function choice(name, fallback) {
+    var checked = document.querySelector('input[name="' + name + '"]:checked');
+    return checked ? checked.value : fallback;
+  }
+
+  var hookEditors = document.querySelectorAll(".hook-edit");
+  var hookOptions = document.getElementById("hook-options");
+  var settings = [
+    ["hook-choice", ".hook-field", "zoi-blok-hook"],
+    ["intro-choice", ".intro-field", "zoi-pembuka"],
+    ["style-choice", ".style-field", "zoi-gaya-hook"],
+    ["pos-choice", ".pos-field", "zoi-posisi-hook"],
+    ["voice-choice", ".voice-field", "zoi-suara-pembaca"],
+  ];
+
+  function applyHook() {
+    settings.forEach(function (item) {
+      var value = choice(item[0], "");
+      document.querySelectorAll(item[1]).forEach(function (field) { field.value = value; });
+    });
+    var hookOn = choice("hook-choice", "1") === "1";
+    var introOn = choice("intro-choice", "0") === "1";
+    hookOptions.hidden = !hookOn;
+    document.getElementById("voice-options").hidden = !introOn;
+    hookEditors.forEach(function (editor) { editor.hidden = !(hookOn || introOn); });
+  }
+
+  settings.forEach(function (item) {
+    var saved = recall(item[2]);
+    document.querySelectorAll('input[name="' + item[0] + '"]').forEach(function (radio) {
+      if (saved !== null && radio.value === saved) { radio.checked = true; }
+      radio.addEventListener("change", function () { applyHook(); remember(item[2], radio.value); });
+    });
+  });
+  applyHook();
+})();
+</script>
+{% endblock %}

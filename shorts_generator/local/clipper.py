@@ -30,7 +30,8 @@ DEFAULT_RENDER_SIZE = RENDER_SIZES["720"]
 # Bingkai video di tengah kanvas 9:16:
 #   "wide"   seluruh frame asli (bawaan, seperti sebelumnya)
 #   "square" bagian tengah frame dipotong persegi 1:1, jadi orang tampil lebih besar
-RENDER_FRAMES = ("wide", "square")
+# "auto" = ikuti pembicara (1:1) atau 16:9 penuh, per shot; lihat reframe.py.
+RENDER_FRAMES = ("wide", "square", "auto")
 
 # FFmpeg dijalankan dengan prioritas lebih rendah supaya HP tetap bisa
 # dipakai selama rendering. 0 mematikan fitur ini.
@@ -179,6 +180,8 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str,
                       progress_callback=None) -> str:
     """Crop the cut clip to the target aspect ratio, tracking faces if possible."""
     try:
+        if not _has_opencv():  # jalur OpenCV lama hanya bila ZOI_OPENCV_REFRAME=1
+            raise ImportError("OpenCV reframe dimatikan")
         import cv2  # type: ignore
     except ImportError:
         # Fallback tanpa OpenCV: seluruh frame asli dipertahankan dan
@@ -289,6 +292,14 @@ def _reframe_vertical(in_path: str, out_path: str, aspect_ratio: str,
 
 
 def _has_opencv() -> bool:
+    """True bila jalur lama pelacakan wajah per frame (_reframe_vertical) dipakai.
+
+    OpenCV sekarang dipasang untuk bingkai "auto" di dashboard. Supaya
+    pemasangan itu tidak diam-diam mengubah hasil jalur lama (pipeline.py
+    tanpa `size`), jalur lama hanya aktif bila ZOI_OPENCV_REFRAME=1.
+    """
+    if os.getenv("ZOI_OPENCV_REFRAME", "").strip() != "1":
+        return False
     try:
         import cv2  # type: ignore  # noqa: F401
     except ImportError:
@@ -311,6 +322,44 @@ def _foreground_filter(width: int, height: int, frame: str,
             f"scale={width}:{width}[fg];"
         )
     return f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
+
+
+def _segments_expression(plan, value):
+    """Ekspresi FFmpeg bertingkat: nilai `value(part)` untuk tiap bagian rencana."""
+    expression = f"{value(plan[-1]):.3f}"
+    for part in reversed(plan[:-1]):
+        expression = f"if(lt(t,{part['end']:.3f}),{value(part):.3f},{expression})"
+    return expression
+
+
+def _auto_foreground(width: int, height: int, plan) -> str:
+    """Dua lapis video di atas latar blur: 16:9 penuh dan potongan 1:1.
+
+    Pada tiap bagian rencana hanya satu lapis yang ditampilkan (opsi
+    `enable` overlay), dan posisi potongan 1:1 mengikuti `x` bagian itu.
+    """
+    wide = "+".join(
+        f"gte(t,{p['start']:.3f})*lt(t,{p['end'] if i < len(plan) - 1 else 1e9:.3f})"
+        for i, p in enumerate(plan) if p["frame"] == "wide"
+    ) or "0"
+    position = _segments_expression(plan, lambda p: max(0.0, min(1.0, float(p["x"]))))
+    return (
+        f"[fw]scale={width}:{height}:force_original_aspect_ratio=decrease[fw];"
+        "[fs]crop='min(iw,ih)':'min(iw,ih)':"
+        f"'(iw-min(iw,ih))*({position})':'(ih-min(iw,ih))/2',"
+        f"scale={width}:{width}[fs];"
+        f"[bg][fw]overlay=(W-w)/2:(H-h)/2:enable='{wide}'[bw];"
+        f"[bw][fs]overlay=(W-w)/2:(H-h)/2:enable='not({wide})',setsar=1"
+    )
+
+
+def _simplify_plan(plan, crop_x):
+    """(frame, crop_x, plan) — rencana satu bagian menjadi bingkai biasa."""
+    if not plan:
+        return "wide", crop_x, None
+    if len(plan) == 1:
+        return plan[0]["frame"], float(plan[0]["x"]), None
+    return "auto", crop_x, plan
 
 
 # ------------------------------------------------------------- blok hook
@@ -538,8 +587,11 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
                                  hook_style: str = "box",
                                  hook_position: str = "top",
                                  intro_text: Optional[str] = None,
-                                 intro_audio: Optional[str] = None) -> str:
+                                 intro_audio: Optional[str] = None,
+                                 plan=None) -> str:
     """Potong dan ubah ke 9:16 dalam satu kali encode (tanpa OpenCV).
+
+    `plan` (dari reframe.plan_auto_frame) dipakai untuk bingkai "auto".
 
     Seluruh frame asli tetap terlihat di tengah; ruang kosong diisi
     salinan frame yang diblur. Blur selalu dikerjakan pada 180x320 lalu
@@ -559,25 +611,39 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
 
     try:
         aspect = _probe_aspect(source_path)
+        if frame == "auto":
+            frame, crop_x, plan = _simplify_plan(plan, crop_x)
+        # Teks diletakkan seolah video 1:1 (gambar paling tinggi), supaya
+        # pada bingkai otomatis tidak menutupi video di bagian mana pun.
+        layout_frame = "square" if frame == "auto" else frame
         hook = ""
         if hook_text and clean_hook_text(hook_text):
             hook = _hook_filters(
-                hook_text, width, height, frame, aspect, work_dir,
+                hook_text, width, height, layout_frame, aspect, work_dir,
                 style=hook_style, position=hook_position, prefix="hook"
             )
 
-        base = (
-            f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
+        background = (
             "[bg]scale=180:320:force_original_aspect_ratio=increase,"
             f"crop=180:320,boxblur=6:3,scale={width}:{height}[bg];"
-            + _foreground_filter(width, height, frame, crop_x)
-            + "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
         )
+        if frame == "auto":
+            base = (
+                f"[0:v]{_fps_limit_filter(source_path)}split=3[bg][fw][fs];"
+                + background + _auto_foreground(width, height, plan)
+            )
+        else:
+            base = (
+                f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
+                + background
+                + _foreground_filter(width, height, frame, crop_x)
+                + "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+            )
 
         intro = ""
         if intro_text and clean_hook_text(intro_text):
             intro = _hook_filters(
-                intro_text, width, height, frame, aspect, work_dir,
+                intro_text, width, height, layout_frame, aspect, work_dir,
                 style="card", position="middle", prefix="intro"
             )
 
@@ -680,6 +746,7 @@ def crop_clip_local(
     hook_position: str = "top",
     intro_text: Optional[str] = None,
     intro_audio: Optional[str] = None,
+    info: Optional[dict] = None,
 ) -> str:
     """Cut + reframe one highlight and report rendering progress.
 
@@ -703,6 +770,23 @@ def crop_clip_local(
         if frame not in RENDER_FRAMES:
             raise ValueError(f"Bingkai tidak dikenal: {frame}")
 
+        plan = None
+        if frame == "auto":
+            from . import reframe
+            plan = reframe.plan_auto_frame(
+                source_path, start_time, end_time, _probe_aspect(source_path),
+                report=progress_callback
+            )
+            note = reframe.describe(plan) if plan is not None else (
+                "Bingkai otomatis butuh OpenCV yang belum terpasang, jadi klip "
+                "dibuat 16:9 penuh. Jalankan ulang mulai_windows.bat untuk memasangnya."
+            )
+            if plan is None:
+                frame = "wide"
+            if info is not None:
+                info["frame_note"] = note
+                info["frame_plan"] = plan
+
         if size or frame != "wide" or hook_text or intro_text or (
             _ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv()
         ):
@@ -711,7 +795,8 @@ def crop_clip_local(
                 progress_callback=progress_callback, size=size, frame=frame,
                 crop_x=crop_x, hook_text=hook_text, hook_style=hook_style,
                 hook_position=hook_position, intro_text=intro_text,
-                intro_audio=os.path.abspath(intro_audio) if intro_audio else None
+                intro_audio=os.path.abspath(intro_audio) if intro_audio else None,
+                plan=plan
             )
         else:
             _cut_subclip(

@@ -38,6 +38,7 @@ from shorts_generator.local.clipper import (
     clean_hook_text, crop_clip_local, save_thumbnail,
 )
 from shorts_generator.local import voiceover
+from shorts_generator.local import reframe
 from shorts_generator.local import speech_to_text
 from shorts_generator.local.downloader import (
     _extract_youtube_video_id, download_audio_local, download_youtube_local,
@@ -306,7 +307,8 @@ def _needed_source_res_for(canvas_width, aspect, frame):
     Bingkai persegi memakai potongan sisi terpendek video selebar kanvas,
     jadi sisi terpendek sumber harus setidaknya selebar kanvas.
     """
-    if frame == "square":
+    # Bingkai otomatis bisa memotong 1:1, jadi butuh sumber seperti 1:1.
+    if frame in ("square", "auto"):
         for tier in SOURCE_TIERS:
             if tier >= canvas_width - 1:
                 return tier
@@ -1443,6 +1445,7 @@ def _render_video_page(analysis, status=200, **extra):
         has_ai=bool(ai_groups),
         ai_names=" dan ".join(item["name"] for item in _analysts_for(mode)),
         voice_ready=voiceover.is_available(),
+        reframe_ready=reframe.available(),
         source_ready=source_path is not None,
         source_is_local=source_path is not None and source_path == _local_film(analysis),
         source_mb=_size_mb(source_path),
@@ -1781,7 +1784,7 @@ def _start_render(form):
     safe_title = re.sub(r"[^a-zA-Z0-9]+", "_", title).strip("_")[:30] or "klip"
     filename = (
         f"zoi_{video_id}_{int(start)}-{int(end)}_{quality}p"
-        f"{'_1x1' if frame == 'square' else ''}_{safe_title}_"
+        f"{ {'square': '_1x1', 'auto': '_auto'}.get(frame, '') }_{safe_title}_"
         f"{uuid.uuid4().hex[:6]}.mp4"
     )
     output_path = os.path.join(OUTPUT_DIR, filename)
@@ -1867,14 +1870,20 @@ def _start_render(form):
                             "mulai_windows.bat untuk memasangnya."
                         )
 
+                render_info = {}
                 try:
                     crop_clip_local(
                         source_path, start, end, "9:16", output_path,
                         progress_callback=update_progress, size=size, frame=frame,
                         crop_x=crop_x / 100, hook_text=hook_text or None,
                         hook_style=hook_style, hook_position=hook_position,
-                        intro_text=intro_text or None, intro_audio=voice_path
+                        intro_text=intro_text or None, intro_audio=voice_path,
+                        info=render_info
                     )
+                    if render_info.get("frame_note"):
+                        notice = " ".join(
+                            part for part in (render_info["frame_note"], notice) if part
+                        )
                 finally:
                     if voice_path and os.path.exists(voice_path):
                         os.remove(voice_path)

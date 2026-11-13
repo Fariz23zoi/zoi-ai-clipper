@@ -152,7 +152,10 @@ class VoiceChoiceTest(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.mkdtemp()
         self.saved = (voiceover.ENGINE, voiceover.edge_available, voiceover.piper_available,
-                      voiceover._edge_synthesize, voiceover._get_voice)
+                      voiceover._edge_synthesize, voiceover._get_voice,
+                      voiceover.voicestudio_running)
+        # VoiceStudio dianggap tidak terbuka (diuji terpisah di test_voicestudio).
+        voiceover.voicestudio_running = lambda timeout=0.4: False
         self.edge_calls = []
         self.edge_error = None
         test = self
@@ -171,7 +174,8 @@ class VoiceChoiceTest(unittest.TestCase):
 
     def tearDown(self):
         (voiceover.ENGINE, voiceover.edge_available, voiceover.piper_available,
-         voiceover._edge_synthesize, voiceover._get_voice) = self.saved
+         voiceover._edge_synthesize, voiceover._get_voice,
+         voiceover.voicestudio_running) = self.saved
         shutil.rmtree(self.folder, ignore_errors=True)
 
     def say(self, gender="wanita"):
