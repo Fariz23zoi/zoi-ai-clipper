@@ -1638,6 +1638,10 @@ def select():
     hook_text = typed_hook if request.form.get("hook_on") == "1" else ""
     intro_text = typed_hook if request.form.get("intro_on") == "1" else ""
 
+    voice_gender = request.form.get("voice", "wanita")
+    if voice_gender not in voiceover.GENDERS:
+        return "Suara pembaca tidak dikenal.", 400
+
     hook_style = request.form.get("hook_style", "box")
     hook_position = request.form.get("hook_pos", "top")
     if hook_style not in HOOK_STYLES or hook_position not in HOOK_POSITIONS:
@@ -1726,7 +1730,11 @@ def select():
                             )
 
                         voice_path = output_path + ".voice.wav"
-                        voiceover.synthesize(intro_text, voice_path, report=voice_report)
+                        spoken = voiceover.synthesize_voice(
+                            intro_text, voice_path, gender=voice_gender,
+                            report=voice_report
+                        )
+                        notice = spoken.get("note", "")
                         _update_job(
                             RENDER_JOBS, job_id,
                             stage="Menyiapkan rendering", progress=0
@@ -1787,7 +1795,7 @@ def select():
         start=start, end=end, job_id=job_id, video=analysis,
         quality=quality, size=f"{size[0]}x{size[1]}", frame=frame,
         crop_x=crop_x, hook_text=hook_text, intro_text=intro_text,
-        hook_style=hook_style, hook_position=hook_position
+        hook_style=hook_style, hook_position=hook_position, voice=voice_gender
     )
 
 

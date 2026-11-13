@@ -31,7 +31,7 @@ if errorlevel 1 ".venv\Scripts\python.exe" -m pip install -q --disable-pip-versi
 if errorlevel 1 echo [!] Pengenal suara gagal dipasang. Video tanpa subtitle belum bisa dianalisis, fitur lain tetap jalan.
 
 rem Suara pembaca untuk pembuka klip. Bila gagal dipasang, fitur lain tetap jalan.
-".venv\Scripts\python.exe" -c "import piper" >nul 2>nul
+".venv\Scripts\python.exe" -c "import piper, edge_tts" >nul 2>nul
 if errorlevel 1 echo Memasang suara pembaca untuk pembuka klip. Sekali saja...
 if errorlevel 1 ".venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r requirements-voice.txt
 if errorlevel 1 echo [!] Suara pembaca gagal dipasang. Pembuka klip dibuat tanpa suara, fitur lain tetap jalan.

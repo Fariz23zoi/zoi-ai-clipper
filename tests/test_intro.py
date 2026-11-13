@@ -138,6 +138,138 @@ class SynthesizeTest(unittest.TestCase):
         self.assertFalse([n for n in os.listdir(self.folder) if n.endswith(".onnx")])
 
 
+def _pitch(path):
+    import numpy
+    from shorts_generator.local.speech_to_text import read_audio
+    audio = read_audio(path)
+    spectrum = numpy.abs(numpy.fft.rfft(audio[: 16000]))
+    return float(numpy.argmax(spectrum[50:]) + 50) * 16000 / 16000
+
+
+class VoiceChoiceTest(unittest.TestCase):
+    """Pria/wanita: Edge dulu, Piper bila gagal; Piper pria = nada diturunkan."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.saved = (voiceover.ENGINE, voiceover.edge_available, voiceover.piper_available,
+                      voiceover._edge_synthesize, voiceover._get_voice)
+        self.edge_calls = []
+        self.edge_error = None
+        test = self
+
+        def fake_edge(spoken, wav_path, gender):
+            test.edge_calls.append((spoken, gender))
+            if test.edge_error:
+                raise test.edge_error
+            _write_tone(wav_path, 1.2)
+
+        voiceover._edge_synthesize = fake_edge
+        voiceover.edge_available = lambda: True
+        voiceover.piper_available = lambda: True
+        voiceover._get_voice = lambda report: ToneVoice()
+        voiceover.ENGINE = "auto"
+
+    def tearDown(self):
+        (voiceover.ENGINE, voiceover.edge_available, voiceover.piper_available,
+         voiceover._edge_synthesize, voiceover._get_voice) = self.saved
+        shutil.rmtree(self.folder, ignore_errors=True)
+
+    def say(self, gender="wanita"):
+        return voiceover.synthesize_voice(
+            "Ebel pernah habis Rp120.000", os.path.join(self.folder, f"{gender}.wav"), gender=gender
+        )
+
+    def test_edge_voices_by_gender(self):
+        self.assertEqual(voiceover.EDGE_VOICES, {"pria": "id-ID-ArdiNeural", "wanita": "id-ID-GadisNeural"})
+        result = self.say("pria")
+        self.assertEqual(result["engine"], "edge")
+        self.assertEqual(result["note"], "")
+        self.assertAlmostEqual(result["seconds"], 1.2, places=2)
+        self.assertEqual(self.edge_calls, [("Ebel pernah habis 120.000 rupiah.", "pria")])
+
+    @unittest.skipUnless(ffmpeg_available(), "FFmpeg tidak terpasang")
+    def test_fallback_to_piper_with_a_note(self):
+        self.edge_error = OSError("tidak ada internet")
+        result = self.say("wanita")
+        self.assertEqual(result["engine"], "piper")
+        self.assertIn("tidak ada internet", result["note"])
+
+    def test_edge_only_mode_reports_the_error(self):
+        voiceover.ENGINE = "edge"
+        self.edge_error = OSError("tidak ada internet")
+        with self.assertRaises(RuntimeError) as caught:
+            self.say()
+        self.assertIn("butuh internet", str(caught.exception))
+
+    def test_piper_only_mode_skips_edge(self):
+        voiceover.ENGINE = "piper"
+        result = self.say("wanita")
+        self.assertEqual(result["engine"], "piper")
+        self.assertEqual(self.edge_calls, [])
+
+    @unittest.skipUnless(ffmpeg_available(), "FFmpeg tidak terpasang")
+    def test_offline_male_voice_has_a_lower_pitch(self):
+        voiceover.ENGINE = "piper"
+        self.say("wanita")
+        self.say("pria")
+        female = _pitch(os.path.join(self.folder, "wanita.wav"))
+        male = _pitch(os.path.join(self.folder, "pria.wav"))
+        self.assertAlmostEqual(male / female, voiceover.PIPER_PITCH["pria"], delta=0.05)
+        # Panjang suara tidak berubah karena nadanya diturunkan.
+        a = voiceover._wav_seconds(os.path.join(self.folder, "wanita.wav"))
+        b = voiceover._wav_seconds(os.path.join(self.folder, "pria.wav"))
+        self.assertAlmostEqual(a, b, delta=0.1)
+
+    def test_unknown_gender(self):
+        with self.assertRaises(ValueError):
+            self.say("robot")
+
+    def test_nothing_installed(self):
+        voiceover.edge_available = lambda: False
+        voiceover.piper_available = lambda: False
+        with self.assertRaises(RuntimeError):
+            self.say()
+
+
+class ToneVoice:
+    """Pengganti Piper: nada 440 Hz selama 1 detik."""
+
+    def synthesize_wav(self, text, wav_file, syn_config=None):
+        import math
+        import struct
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(22050)
+        wav_file.writeframes(b"".join(
+            struct.pack("<h", int(12000 * math.sin(2 * math.pi * 440 * i / 22050)))
+            for i in range(22050)
+        ))
+
+
+@unittest.skipUnless(
+    voiceover.edge_available() and os.getenv("ZOI_TEST_EDGE") == "1",
+    "isi ZOI_TEST_EDGE=1 untuk uji suara Edge asli (butuh internet)",
+)
+class RealEdgeTest(unittest.TestCase):
+    def test_both_genders(self):
+        folder = tempfile.mkdtemp()
+        try:
+            pitches = {}
+            for gender in voiceover.GENDERS:
+                path = os.path.join(folder, f"{gender}.wav")
+                saved = voiceover.ENGINE
+                voiceover.ENGINE = "edge"
+                try:
+                    result = voiceover.synthesize_voice("Ebel pernah habis 120 juta", path, gender=gender)
+                finally:
+                    voiceover.ENGINE = saved
+                self.assertEqual(result["engine"], "edge")
+                self.assertGreater(result["seconds"], 1.0)
+                pitches[gender] = result["seconds"]
+        finally:
+            shutil.rmtree(folder)
+
+
 class CardLayoutTest(unittest.TestCase):
     def test_card_filters(self):
         if not clipper.find_card_font():
@@ -151,7 +283,8 @@ class CardLayoutTest(unittest.TestCase):
             self.assertIn(clipper.CARD_COLOR, text)
             self.assertIn("fontcolor=black", text)
             names = sorted(n for n in os.listdir(folder) if n.endswith(".txt"))
-            lines = [open(os.path.join(folder, n), encoding="utf-8").read() for n in names]
+            from pathlib import Path
+            lines = [Path(folder, n).read_text(encoding="utf-8") for n in names]
             self.assertEqual(" ".join(lines), "PERNAH HABIS 120 JUTA")
             self.assertTrue(os.path.isfile(os.path.join(folder, "introfont.ttf")))
         finally:
@@ -245,7 +378,7 @@ class DashboardIntroTest(unittest.TestCase):
         from tests.helpers import sample_transcript
         self.folder = tempfile.mkdtemp()
         self.saved = (zoi_app.OUTPUT_DIR, exchange.DATA_DIR, voiceover.is_available,
-                      voiceover.synthesize, zoi_app.crop_clip_local)
+                      voiceover.synthesize_voice, zoi_app.crop_clip_local)
         zoi_app.OUTPUT_DIR = self.folder
         exchange.DATA_DIR = os.path.join(self.folder, "data")
         transcript = sample_transcript()
@@ -266,18 +399,22 @@ class DashboardIntroTest(unittest.TestCase):
         self.spoken = []
         test = self
 
-        def fake_synthesize(text, wav_path, report=None, voice=None):
-            test.spoken.append(text)
-            _write_tone(wav_path, 1.5)
-            return 1.5
+        test.voice_note = ""
 
-        voiceover.synthesize = fake_synthesize
+        def fake_synthesize(text, wav_path, gender="wanita", report=None, voice=None):
+            test.spoken.append(text)
+            test.genders.append(gender)
+            _write_tone(wav_path, 1.5)
+            return {"seconds": 1.5, "engine": "edge", "note": test.voice_note}
+
+        self.genders = []
+        voiceover.synthesize_voice = fake_synthesize
         voiceover.is_available = lambda: True
         self.client = zoi_app.app.test_client()
 
     def tearDown(self):
         (zoi_app.OUTPUT_DIR, exchange.DATA_DIR, voiceover.is_available,
-         voiceover.synthesize, zoi_app.crop_clip_local) = self.saved
+         voiceover.synthesize_voice, zoi_app.crop_clip_local) = self.saved
         shutil.rmtree(self.folder, ignore_errors=True)
 
     def render(self, **form):
@@ -303,8 +440,14 @@ class DashboardIntroTest(unittest.TestCase):
                      'class="style-field"', 'class="pos-field"', "Kok bisa semahal ini?"):
             self.assertIn(text, html)
 
+    def test_voice_choice_on_page(self):
+        html = self.client.get(f"/video/{VIDEO_ID}").get_data(as_text=True)
+        self.assertIn('name="voice-choice" value="pria"', html)
+        self.assertIn('name="voice-choice" value="wanita" checked', html)
+        self.assertIn('class="voice-field"', html)
+
     def test_bad_style_is_refused(self):
-        for form in ({"hook_style": "bulat"}, {"hook_pos": "bawah"}):
+        for form in ({"hook_style": "bulat"}, {"hook_pos": "bawah"}, {"voice": "robot"}):
             data = {"video_id": VIDEO_ID, "start_time": "3", "end_time": "10", **form}
             self.assertEqual(self.client.post("/select", data=data).status_code, 400)
 
@@ -315,6 +458,7 @@ class DashboardIntroTest(unittest.TestCase):
         self.assertIn("kartu kuning, tengah", html)
         self.assertEqual(status["status"], "done", status)
         self.assertEqual(self.spoken, ["Kok bisa semahal ini?"])
+        self.assertEqual(self.genders, ["wanita"])
         self.assertTrue(status["thumbnail"].endswith("_thumb.jpg"))
         self.assertEqual(status["notice"], "")
         self.assertAlmostEqual(_duration(os.path.join(self.folder, status["filename"])), 7 + 2.0, delta=0.3)
@@ -342,6 +486,14 @@ class DashboardIntroTest(unittest.TestCase):
         self.assertEqual(captured[0]["intro_text"], "Kok bisa semahal ini?")
         self.assertIsNone(captured[0]["intro_audio"])
         self.assertIsNone(captured[0]["hook_text"])
+
+    def test_male_voice_and_fallback_note(self):
+        self.voice_note = "Suara Edge gagal dibuat (mungkin tidak ada internet), jadi dipakai suara offline Piper."
+        zoi_app.crop_clip_local = lambda *a, **k: open(a[4], "wb").close()
+        status, html = self.render(intro_on="1", hook_on="0", voice="pria")
+        self.assertIn("Pembuka + suara pria", html)
+        self.assertEqual(self.genders, ["pria"])
+        self.assertIn("suara offline Piper", status["notice"])
 
     def test_intro_off_passes_nothing(self):
         captured = []

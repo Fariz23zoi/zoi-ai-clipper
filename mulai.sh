@@ -28,7 +28,7 @@ if [ -z "${TERMUX_VERSION:-}" ] && [ "${ZOI_SPEECH:-1}" != "0" ]; then
     .venv/bin/python -m pip install -q --disable-pip-version-check -r requirements-speech.txt \
       || echo "[!] Pengenal suara gagal dipasang. Video tanpa subtitle belum bisa dianalisis, fitur lain tetap jalan."
   fi
-  if ! .venv/bin/python -c "import piper" >/dev/null 2>&1; then
+  if ! .venv/bin/python -c "import piper, edge_tts" >/dev/null 2>&1; then
     echo "Memasang suara pembaca untuk pembuka klip. Sekali saja..."
     .venv/bin/python -m pip install -q --disable-pip-version-check -r requirements-voice.txt \
       || echo "[!] Suara pembaca gagal dipasang. Pembuka klip dibuat tanpa suara, fitur lain tetap jalan."

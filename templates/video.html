@@ -87,6 +87,10 @@
       <label><input class="sr-only" type="radio" name="intro-choice" value="0" checked><span>Mati</span></label>
     </div>
   </fieldset>
+  <div class="seg" id="voice-options" style="grid-template-columns:1fr 1fr;margin-top:8px">
+    <label><input class="sr-only" type="radio" name="voice-choice" value="pria"><span>Suara pria</span></label>
+    <label><input class="sr-only" type="radio" name="voice-choice" value="wanita" checked><span>Suara wanita</span></label>
+  </div>
   <p class="muted" style="margin:8px 0 0">Klip diawali gambar diam dengan kartu hook kuning di tengah sambil hook dibacakan, lalu konten dimulai. Gambar itu juga disimpan sebagai thumbnail.
     {% if not voice_ready %}<br><span class="warn">Suara pembaca belum terpasang, jadi pembuka dibuat tanpa suara. Jalankan ulang mulai_windows.bat untuk memasangnya.</span>{% endif %}</p>
 
@@ -150,6 +154,7 @@
       <input type="hidden" name="crop_x" value="50" class="crop-field">
       <input type="hidden" name="hook_on" value="1" class="hook-field">
       <input type="hidden" name="intro_on" value="0" class="intro-field">
+      <input type="hidden" name="voice" value="wanita" class="voice-field">
       <input type="hidden" name="hook_style" value="box" class="style-field">
       <input type="hidden" name="hook_pos" value="top" class="pos-field">
       <div class="hook-edit">
@@ -323,6 +328,7 @@
     ["intro-choice", ".intro-field", "zoi-pembuka"],
     ["style-choice", ".style-field", "zoi-gaya-hook"],
     ["pos-choice", ".pos-field", "zoi-posisi-hook"],
+    ["voice-choice", ".voice-field", "zoi-suara-pembaca"],
   ];
 
   function applyHook() {
@@ -333,6 +339,7 @@
     var hookOn = choice("hook-choice", "1") === "1";
     var introOn = choice("intro-choice", "0") === "1";
     hookOptions.hidden = !hookOn;
+    document.getElementById("voice-options").hidden = !introOn;
     hookEditors.forEach(function (editor) { editor.hidden = !(hookOn || introOn); });
   }
 

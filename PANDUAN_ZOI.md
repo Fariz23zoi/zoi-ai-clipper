@@ -146,8 +146,11 @@ Bingkai 1:1 butuh video sumber yang lebih tajam (misalnya 720p untuk render 720p
 Di halaman 3 ada sakelar **Pembuka: thumbnail + suara pembaca**. Bila aktif, klip diawali gambar pertama klip yang dibekukan, dengan **kartu hook kuning di tengah**, sementara teks hook **dibacakan suara pembaca**. Setelah suara selesai (ditambah jeda 0,5 detik), konten dimulai.
 
 - Gambar pembuka itu juga disimpan sebagai **thumbnail JPG**; tombol **Unduh thumbnail** muncul setelah render.
-- Suara pembaca memakai **Piper**, berjalan di laptop sendiri tanpa API key dan tanpa biaya. Dipasang otomatis oleh `mulai_windows.bat` (manual: `pip install -r requirements-voice.txt`). Suara bahasa Indonesia sekitar 63 MB diunduh sekali saat pertama dipakai, ke folder `models/piper`.
-- Bila Piper belum terpasang, pembuka tetap dibuat tanpa suara (1,5 detik) dan ada pemberitahuan setelah render.
+- Pilih **Suara pria** atau **Suara wanita**.
+- Suara utama: **Microsoft Edge** (Ardi untuk pria, Gadis untuk wanita). Alami, gratis, tanpa API key, tetapi butuh internet saat render. Ini layanan baca-teks milik browser Edge yang dipakai tanpa jalur resmi, jadi suatu saat bisa berhenti bekerja.
+- Cadangan otomatis: **Piper**, berjalan di laptop tanpa internet. Piper bahasa Indonesia hanya punya suara wanita; suara pria dibuat dengan menurunkan nadanya, jadi terdengar lebih robotik. Bila cadangan ini terpakai, ada pemberitahuan setelah render. Suara Piper (sekitar 63 MB) diunduh sekali ke folder `models/piper`.
+- Keduanya dipasang otomatis oleh `mulai_windows.bat` (manual: `pip install -r requirements-voice.txt`).
+- Bila tidak ada mesin suara yang terpasang, pembuka tetap dibuat tanpa suara (1,5 detik) dan ada pemberitahuan setelah render.
 - "Rp800.000" dibacakan sebagai "800.000 rupiah". Kecepatan bicara diatur lewat `ZOI_VOICE_SPEED` (bawaan 0.85; lebih kecil = lebih cepat).
 
 ## Blok hook
@@ -243,7 +246,9 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_PORT` | `5000` | Port dashboard |
 | `ZOI_RENDER_PRESET` | `veryfast` | `ultrafast` lebih cepat, file lebih besar |
 | `ZOI_RENDER_CRF` | `23` | Lebih kecil = kualitas lebih tinggi |
-| `ZOI_VOICE_SPEED` | `0.85` | Kecepatan suara pembaca; lebih kecil = lebih cepat |
+| `ZOI_VOICE_ENGINE` | `auto` | `auto` = Edge lalu Piper; `edge` = Edge saja; `piper` = Piper saja (selalu offline) |
+| `ZOI_EDGE_RATE` | `+10%` | Kecepatan suara Edge, misalnya `+20%` lebih cepat |
+| `ZOI_VOICE_SPEED` | `0.85` | Kecepatan suara Piper; lebih kecil = lebih cepat |
 | `ZOI_HOOK_FONT` | otomatis | Lokasi file font `.ttf` untuk blok hook |
 | `ZOI_RENDER_MAX_FPS` | `30` | Batas fps hasil render; `0` = ikut sumber |
 | `ZOI_RENDER_NICE` | `10` | Prioritas FFmpeg (0-19); `0` = prioritas normal |

@@ -144,7 +144,7 @@ class LauncherFilesTest(unittest.TestCase):
     def test_voice_is_installed_but_not_required(self):
         self.assertIn("piper-tts", (ROOT / "requirements-voice.txt").read_text(encoding="utf-8"))
         text = self.read("mulai_windows.bat")
-        start = text.index("import piper")
+        start = text.index("import piper, edge_tts")
         block = text[start:text.index("set ZOI_OPEN_BROWSER")]
         self.assertIn("requirements-voice.txt", block)
         self.assertNotIn("exit /b", block)
