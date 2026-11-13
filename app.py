@@ -33,8 +33,10 @@ from shorts_generator.config import (
     CLAUDE_API_KEY, LOCAL_OUTPUT_DIR, OPENAI_API_KEY,
 )
 from shorts_generator.local.clipper import (
-    RENDER_FRAMES, RENDER_SIZES, clean_hook_text, crop_clip_local,
+    HOOK_POSITIONS, HOOK_STYLES, RENDER_FRAMES, RENDER_SIZES,
+    clean_hook_text, crop_clip_local, save_thumbnail,
 )
+from shorts_generator.local import voiceover
 from shorts_generator.local import speech_to_text
 from shorts_generator.local.downloader import (
     _extract_youtube_video_id, download_audio_local, download_youtube_local,
@@ -1323,6 +1325,7 @@ def _render_video_page(analysis, status=200, **extra):
         groups=ai_groups + zoi_groups,
         has_ai=bool(ai_groups),
         ai_names=" dan ".join(item["name"] for item in _analysts_for(mode)),
+        voice_ready=voiceover.is_available(),
         source_ready=source_path is not None,
         source_is_local=source_path is not None and source_path == _local_film(analysis),
         source_mb=_size_mb(source_path),
@@ -1576,6 +1579,9 @@ def delete_clip():
         abort(404)
 
     os.remove(path)
+    thumbnail = path[:-4] + "_thumb.jpg"
+    if os.path.isfile(thumbnail):
+        os.remove(thumbnail)
 
     if exchange.is_valid_video_id(video_id) and exchange.load_analysis(video_id):
         return redirect(url_for("video_page", video_id=video_id, deleted="klip"))
@@ -1628,9 +1634,14 @@ def select():
         return "Posisi potong tidak valid.", 400
     crop_x = max(0.0, min(100.0, crop_x))
 
-    hook_text = ""
-    if request.form.get("hook_on") == "1":
-        hook_text = clean_hook_text(request.form.get("hook_text", ""))
+    typed_hook = clean_hook_text(request.form.get("hook_text", ""))
+    hook_text = typed_hook if request.form.get("hook_on") == "1" else ""
+    intro_text = typed_hook if request.form.get("intro_on") == "1" else ""
+
+    hook_style = request.form.get("hook_style", "box")
+    hook_position = request.form.get("hook_pos", "top")
+    if hook_style not in HOOK_STYLES or hook_position not in HOOK_POSITIONS:
+        return "Gaya atau posisi hook tidak dikenal.", 400
 
     size = QUALITIES[quality]
     needed = _needed_source_res_for(size[0], _aspect(analysis), frame)
@@ -1705,19 +1716,58 @@ def select():
                         progress=max(0, min(99, int(percent))), stage=stage
                     )
 
-                crop_clip_local(
-                    source_path, start, end, "9:16", output_path,
-                    progress_callback=update_progress, size=size, frame=frame,
-                    crop_x=crop_x / 100, hook_text=hook_text or None
-                )
+                voice_path = None
+                notice = ""
+                if intro_text:
+                    if voiceover.is_available():
+                        def voice_report(stage, progress=None):
+                            _update_job(
+                                RENDER_JOBS, job_id, stage=stage, progress=progress
+                            )
+
+                        voice_path = output_path + ".voice.wav"
+                        voiceover.synthesize(intro_text, voice_path, report=voice_report)
+                        _update_job(
+                            RENDER_JOBS, job_id,
+                            stage="Menyiapkan rendering", progress=0
+                        )
+                    else:
+                        notice = (
+                            "Pembuka dibuat tanpa suara karena suara pembaca "
+                            "(Piper) belum terpasang. Jalankan ulang "
+                            "mulai_windows.bat untuk memasangnya."
+                        )
+
+                try:
+                    crop_clip_local(
+                        source_path, start, end, "9:16", output_path,
+                        progress_callback=update_progress, size=size, frame=frame,
+                        crop_x=crop_x / 100, hook_text=hook_text or None,
+                        hook_style=hook_style, hook_position=hook_position,
+                        intro_text=intro_text or None, intro_audio=voice_path
+                    )
+                finally:
+                    if voice_path and os.path.exists(voice_path):
+                        os.remove(voice_path)
 
                 # 100% hanya setelah file akhir benar-benar ada.
                 if not os.path.isfile(output_path):
                     raise RuntimeError("File hasil render tidak ditemukan.")
 
+                thumbnail = ""
+                if intro_text:
+                    thumbnail = os.path.basename(output_path)[:-4] + "_thumb.jpg"
+                    try:
+                        save_thumbnail(
+                            output_path, os.path.join(OUTPUT_DIR, thumbnail)
+                        )
+                    except Exception:
+                        thumbnail = ""
+
                 _update_job(
                     RENDER_JOBS, job_id,
-                    progress=100, stage="Rendering selesai", status="done"
+                    progress=100, stage="Rendering selesai", status="done",
+                    thumbnail=thumbnail, notice=notice
                 )
 
             except Exception as error:
@@ -1736,7 +1786,8 @@ def select():
         title=title, analyst=analyst, duration=round(end - start, 1),
         start=start, end=end, job_id=job_id, video=analysis,
         quality=quality, size=f"{size[0]}x{size[1]}", frame=frame,
-        crop_x=crop_x, hook_text=hook_text
+        crop_x=crop_x, hook_text=hook_text, intro_text=intro_text,
+        hook_style=hook_style, hook_position=hook_position
     )
 
 
@@ -1746,6 +1797,20 @@ def render_progress(job_id):
     if not job:
         return jsonify({"status": "not_found"}), 404
     return jsonify(job)
+
+
+@app.route("/thumb/<filename>")
+def serve_thumbnail(filename):
+    """Thumbnail hasil render (gambar pembuka)."""
+    if (
+        filename != os.path.basename(filename)
+        or not filename.startswith("zoi_") or not filename.endswith("_thumb.jpg")
+        or not os.path.isfile(os.path.join(OUTPUT_DIR, filename))
+    ):
+        abort(404)
+    return send_from_directory(
+        OUTPUT_DIR, filename, as_attachment=bool(request.args.get("dl"))
+    )
 
 
 @app.route("/output/<path:filename>")

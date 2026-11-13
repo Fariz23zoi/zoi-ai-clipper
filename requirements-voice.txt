@@ -1,0 +1,5 @@
+# Suara pembaca untuk pembuka klip (opsional, untuk laptop).
+# Dipasang otomatis oleh mulai_windows.bat dan mulai.sh.
+# Manual: pip install -r requirements-voice.txt
+# Suara bahasa Indonesia (sekitar 63 MB) diunduh sekali saat pertama dipakai.
+piper-tts>=1.3

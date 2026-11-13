@@ -141,11 +141,20 @@ Saat **1:1 persegi** dipilih, muncul penggeser **Posisi potongan 1:1** (Kiri sam
 
 Bingkai 1:1 butuh video sumber yang lebih tajam (misalnya 720p untuk render 720p), jadi kadang ZOI mengunduh ulang sumbernya. Pilihan terakhir diingat browser. Nama file hasil bingkai 1:1 mengandung `_1x1`.
 
+## Pembuka: thumbnail + suara pembaca
+
+Di halaman 3 ada sakelar **Pembuka: thumbnail + suara pembaca**. Bila aktif, klip diawali gambar pertama klip yang dibekukan, dengan **kartu hook kuning di tengah**, sementara teks hook **dibacakan suara pembaca**. Setelah suara selesai (ditambah jeda 0,5 detik), konten dimulai.
+
+- Gambar pembuka itu juga disimpan sebagai **thumbnail JPG**; tombol **Unduh thumbnail** muncul setelah render.
+- Suara pembaca memakai **Piper**, berjalan di laptop sendiri tanpa API key dan tanpa biaya. Dipasang otomatis oleh `mulai_windows.bat` (manual: `pip install -r requirements-voice.txt`). Suara bahasa Indonesia sekitar 63 MB diunduh sekali saat pertama dipakai, ke folder `models/piper`.
+- Bila Piper belum terpasang, pembuka tetap dibuat tanpa suara (1,5 detik) dan ada pemberitahuan setelah render.
+- "Rp800.000" dibacakan sebagai "800.000 rupiah". Kecepatan bicara diatur lewat `ZOI_VOICE_SPEED` (bawaan 0.85; lebih kecil = lebih cepat).
+
 ## Blok hook
 
-Di halaman 3 ada sakelar **Blok hook** (Aktif/Mati). Bila aktif, teks hook tampil di bagian atas video dalam kotak gelap, maksimal 3 baris (ukuran huruf mengecil otomatis untuk teks panjang).
+Di halaman 3 ada sakelar **Blok hook selama video** (Aktif/Mati). Bila aktif, teks hook tampil sepanjang klip, maksimal 3 baris (ukuran huruf mengecil otomatis untuk teks panjang). Pilih gayanya, **Kotak gelap** atau **Kartu kuning**, dan posisinya, **Atas** atau **Tengah**.
 
-- Tiap klip punya kotak **Teks blok hook** yang terisi otomatis dari hook hasil analisis. Edit teksnya sesuka Anda sebelum menekan **Render klip ini**.
+- Tiap klip punya kotak **Teks blok hook** yang terisi otomatis dari hook hasil analisis; teks yang sama dipakai untuk pembuka. Edit teksnya sesuka Anda sebelum menekan **Render klip ini**.
 - Tanda seperti `[tertawa]` dan emoji dibuang otomatis, karena font biasa tidak punya gambar emoji. Maksimal 150 karakter.
 - Kosongkan kotaknya bila satu klip tidak perlu blok hook.
 - Font yang dipakai: Arial Bold di Windows, DejaVu Sans Bold di Linux, Roboto di Android. Font lain bisa dipilih lewat `ZOI_HOOK_FONT`.
@@ -234,6 +243,7 @@ Tes memakai video buatan FFmpeg dan transkrip contoh, sehingga tidak butuh inter
 | `ZOI_PORT` | `5000` | Port dashboard |
 | `ZOI_RENDER_PRESET` | `veryfast` | `ultrafast` lebih cepat, file lebih besar |
 | `ZOI_RENDER_CRF` | `23` | Lebih kecil = kualitas lebih tinggi |
+| `ZOI_VOICE_SPEED` | `0.85` | Kecepatan suara pembaca; lebih kecil = lebih cepat |
 | `ZOI_HOOK_FONT` | otomatis | Lokasi file font `.ttf` untuk blok hook |
 | `ZOI_RENDER_MAX_FPS` | `30` | Batas fps hasil render; `0` = ikut sumber |
 | `ZOI_RENDER_NICE` | `10` | Prioritas FFmpeg (0-19); `0` = prioritas normal |

@@ -141,6 +141,15 @@ class LauncherFilesTest(unittest.TestCase):
         self.assertIn("TERMUX_VERSION", text)
         self.assertIn('|| echo "[!] Pengenal suara gagal dipasang', text)
 
+    def test_voice_is_installed_but_not_required(self):
+        self.assertIn("piper-tts", (ROOT / "requirements-voice.txt").read_text(encoding="utf-8"))
+        text = self.read("mulai_windows.bat")
+        start = text.index("import piper")
+        block = text[start:text.index("set ZOI_OPEN_BROWSER")]
+        self.assertIn("requirements-voice.txt", block)
+        self.assertNotIn("exit /b", block)
+        self.assertIn("requirements-voice.txt", self.read("mulai.sh"))
+
     def test_phone_launcher_shares_on_wifi_and_reuses_main_launcher(self):
         text = self.read("mulai_windows_hp.bat")
         self.assertIn("set ZOI_HOST=0.0.0.0", text)

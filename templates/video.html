@@ -81,13 +81,33 @@
   </div>
 
   <fieldset class="plain" style="margin-top:14px">
-    <legend>Blok hook</legend>
+    <legend>Pembuka: thumbnail + suara pembaca</legend>
+    <div class="seg" style="grid-template-columns:1fr 1fr">
+      <label><input class="sr-only" type="radio" name="intro-choice" value="1"><span>Aktif</span></label>
+      <label><input class="sr-only" type="radio" name="intro-choice" value="0" checked><span>Mati</span></label>
+    </div>
+  </fieldset>
+  <p class="muted" style="margin:8px 0 0">Klip diawali gambar diam dengan kartu hook kuning di tengah sambil hook dibacakan, lalu konten dimulai. Gambar itu juga disimpan sebagai thumbnail.
+    {% if not voice_ready %}<br><span class="warn">Suara pembaca belum terpasang, jadi pembuka dibuat tanpa suara. Jalankan ulang mulai_windows.bat untuk memasangnya.</span>{% endif %}</p>
+
+  <fieldset class="plain" style="margin-top:14px">
+    <legend>Blok hook selama video</legend>
     <div class="seg" style="grid-template-columns:1fr 1fr">
       <label><input class="sr-only" type="radio" name="hook-choice" value="1" checked><span>Aktif</span></label>
       <label><input class="sr-only" type="radio" name="hook-choice" value="0"><span>Mati</span></label>
     </div>
   </fieldset>
-  <p class="muted" style="margin:8px 0 0">Teks hook tampil di bagian atas video. Teksnya terisi otomatis dari hasil analisis dan bisa diedit di tiap klip sebelum dirender.</p>
+  <div id="hook-options">
+    <div class="seg" style="grid-template-columns:1fr 1fr;margin-top:8px">
+      <label><input class="sr-only" type="radio" name="style-choice" value="box" checked><span>Kotak gelap</span></label>
+      <label><input class="sr-only" type="radio" name="style-choice" value="card"><span>Kartu kuning</span></label>
+    </div>
+    <div class="seg" style="grid-template-columns:1fr 1fr;margin-top:8px">
+      <label><input class="sr-only" type="radio" name="pos-choice" value="top" checked><span>Atas</span></label>
+      <label><input class="sr-only" type="radio" name="pos-choice" value="middle"><span>Tengah</span></label>
+    </div>
+  </div>
+  <p class="muted" style="margin:8px 0 0">Teks hook terisi otomatis dari hasil analisis dan bisa diedit di tiap klip sebelum dirender. Teks yang sama dipakai untuk pembuka.</p>
   <p class="muted" id="quality-note" style="margin:10px 0 0">Hasil {{ chosen.size }}.
     {% if chosen.ready %}Video sumber sudah tersimpan, jadi render langsung jalan.
     {% elif source_ready %}Video sumber diunduh ulang pada kualitas {{ chosen.source }}p saat render.
@@ -129,6 +149,9 @@
       <input type="hidden" name="frame" value="wide" class="frame-field">
       <input type="hidden" name="crop_x" value="50" class="crop-field">
       <input type="hidden" name="hook_on" value="1" class="hook-field">
+      <input type="hidden" name="intro_on" value="0" class="intro-field">
+      <input type="hidden" name="hook_style" value="box" class="style-field">
+      <input type="hidden" name="hook_pos" value="top" class="pos-field">
       <div class="hook-edit">
         <label class="field" for="hook-{{ group.name|replace(' ', '')|replace('(', '')|replace(')', '')|replace('.', '') }}-{{ loop.index }}">Teks blok hook</label>
         <textarea id="hook-{{ group.name|replace(' ', '')|replace('(', '')|replace(')', '')|replace('.', '') }}-{{ loop.index }}" name="hook_text" maxlength="150"
@@ -287,23 +310,38 @@
   frames.forEach(function (radio) { radio.addEventListener("change", showCropPanel); });
   showCropPanel();
 
-  // ---- blok hook
-  var hookChoices = document.querySelectorAll('input[name="hook-choice"]');
-  var hookFields = document.querySelectorAll(".hook-field");
-  var hookEditors = document.querySelectorAll(".hook-edit");
-  var HOOK_KEY = "zoi-blok-hook";
-
-  function applyHook() {
-    var checked = document.querySelector('input[name="hook-choice"]:checked');
-    var on = !checked || checked.value === "1";
-    hookFields.forEach(function (field) { field.value = on ? "1" : "0"; });
-    hookEditors.forEach(function (editor) { editor.hidden = !on; });
+  // ---- blok hook dan pembuka
+  function choice(name, fallback) {
+    var checked = document.querySelector('input[name="' + name + '"]:checked');
+    return checked ? checked.value : fallback;
   }
 
-  var savedHook = recall(HOOK_KEY);
-  hookChoices.forEach(function (radio) {
-    if (savedHook !== null && radio.value === savedHook) { radio.checked = true; }
-    radio.addEventListener("change", function () { applyHook(); remember(HOOK_KEY, radio.value); });
+  var hookEditors = document.querySelectorAll(".hook-edit");
+  var hookOptions = document.getElementById("hook-options");
+  var settings = [
+    ["hook-choice", ".hook-field", "zoi-blok-hook"],
+    ["intro-choice", ".intro-field", "zoi-pembuka"],
+    ["style-choice", ".style-field", "zoi-gaya-hook"],
+    ["pos-choice", ".pos-field", "zoi-posisi-hook"],
+  ];
+
+  function applyHook() {
+    settings.forEach(function (item) {
+      var value = choice(item[0], "");
+      document.querySelectorAll(item[1]).forEach(function (field) { field.value = value; });
+    });
+    var hookOn = choice("hook-choice", "1") === "1";
+    var introOn = choice("intro-choice", "0") === "1";
+    hookOptions.hidden = !hookOn;
+    hookEditors.forEach(function (editor) { editor.hidden = !(hookOn || introOn); });
+  }
+
+  settings.forEach(function (item) {
+    var saved = recall(item[2]);
+    document.querySelectorAll('input[name="' + item[0] + '"]').forEach(function (radio) {
+      if (saved !== null && radio.value === saved) { radio.checked = true; }
+      radio.addEventListener("change", function () { applyHook(); remember(item[2], radio.value); });
+    });
   });
   applyHook();
 })();

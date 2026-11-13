@@ -333,6 +333,32 @@ _HOOK_FONTS = (
 )
 
 
+_CARD_FONTS = (
+    "C:/Windows/Fonts/ariblk.ttf",
+    "C:/Windows/Fonts/arialbi.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-BoldOblique.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-BoldOblique.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Black.ttf",
+)
+
+HOOK_STYLES = ("box", "card")
+HOOK_POSITIONS = ("top", "middle")
+CARD_COLOR = "0xF7C948"
+CARD_SHADOW = "0xC9961A"
+
+
+def find_card_font() -> Optional[str]:
+    """Font tebal untuk kartu hook kuning; bila tidak ada, font hook biasa."""
+    custom = os.getenv("ZOI_HOOK_FONT", "").strip()
+    if custom and os.path.isfile(custom):
+        return custom
+    for path in _CARD_FONTS:
+        if os.path.isfile(path):
+            return path
+    return find_hook_font()
+
+
 def find_hook_font() -> Optional[str]:
     """File font tebal untuk teks hook; ZOI_HOOK_FONT bisa menunjuk font lain."""
     custom = os.getenv("ZOI_HOOK_FONT", "").strip()
@@ -352,7 +378,9 @@ def clean_hook_text(text) -> str:
     return re.sub(r"\s+", " ", text).strip()[:HOOK_MAX_CHARS]
 
 
-def layout_hook(text: str, width: int):
+def layout_hook(text: str, width: int, inner: float = 0.84,
+                char: float = 0.56, upper: bool = False,
+                scales=(0.062, 0.054, 0.047)):
     """Bagi teks hook menjadi paling banyak 3 baris yang muat di kanvas.
 
     Mengembalikan (ukuran_font, daftar_baris). Font diperkecil bila teks
@@ -361,12 +389,14 @@ def layout_hook(text: str, width: int):
     import textwrap
 
     text = clean_hook_text(text)
+    if upper:
+        text = text.upper()
     if not text:
         return 0, []
 
-    for scale in (0.062, 0.054, 0.047):
+    for scale in scales:
         size = max(12, int(width * scale))
-        per_line = max(8, int(width * 0.84 / (size * 0.56)))
+        per_line = max(8, int(width * inner / (size * char)))
         lines = textwrap.wrap(text, width=per_line, break_long_words=True)
         if len(lines) <= HOOK_MAX_LINES:
             return size, lines
@@ -393,8 +423,10 @@ def _probe_aspect(path: str) -> float:
 
 
 def _hook_filters(text: str, width: int, height: int, frame: str,
-                  aspect: float, work_dir: str) -> str:
-    """Filter drawtext untuk blok hook di area atas kanvas.
+                  aspect: float, work_dir: str, style: str = "box",
+                  position: str = "top", prefix: str = "hook") -> str:
+    """Filter blok hook: "box" (teks putih di kotak gelap) atau "card"
+    (kartu kuning dengan teks hitam kapital), di "top" atau "middle".
 
     Font dan teks disalin ke folder kerja lalu dipanggil dengan nama
     pendek, supaya tidak ada masalah tanda khusus pada path Windows
@@ -402,56 +434,123 @@ def _hook_filters(text: str, width: int, height: int, frame: str,
     """
     import shutil
 
-    size, lines = layout_hook(text, width)
+    if style not in HOOK_STYLES:
+        raise ValueError(f"Gaya hook tidak dikenal: {style}")
+    if position not in HOOK_POSITIONS:
+        raise ValueError(f"Posisi hook tidak dikenal: {position}")
+
+    card = style == "card"
+    if card:
+        size, lines = layout_hook(
+            text, width, inner=0.78, char=0.64, upper=True,
+            scales=(0.074, 0.064, 0.055)
+        )
+    else:
+        size, lines = layout_hook(text, width)
     if not lines:
         return ""
 
-    font = find_hook_font()
+    font = find_card_font() if card else find_hook_font()
     if not font:
         raise RuntimeError(
             "Font untuk blok hook tidak ditemukan. Matikan blok hook, atau "
             "isi ZOI_HOOK_FONT dengan lokasi file font .ttf."
         )
-    shutil.copyfile(font, os.path.join(work_dir, "hookfont.ttf"))
+    font_name = f"{prefix}font.ttf"
+    shutil.copyfile(font, os.path.join(work_dir, font_name))
 
     picture = width if frame == "square" else min(height, width / max(aspect, 0.1))
     top_space = (height - picture) / 2
-    line_step = int(size * 1.55)
+    line_step = int(size * (1.3 if card else 1.55))
     block = line_step * len(lines)
-    pad = int(size * 0.32)
+    pad = int(size * (0.75 if card else 0.32))
+    total = block + pad * 2
 
-    if top_space >= block + pad * 2:
-        first_y = int((top_space - block) / 2) + pad
+    if position == "middle":
+        top = int((height - total) / 2)
+    elif top_space >= total:
+        top = int((top_space - total) / 2)
     else:
-        first_y = int(height * 0.06)
+        top = int(height * 0.04)
 
     filters = []
+
+    if card:
+        card_w = int(width * 0.88)
+        x0 = (width - card_w) // 2
+        shift = max(4, width // 90)
+        border = max(3, width // 200)
+        filters += [
+            f"drawbox=x={x0 + shift}:y={top + shift}:w={card_w}:h={total}"
+            f":color={CARD_SHADOW}:t=fill",
+            f"drawbox=x={x0}:y={top}:w={card_w}:h={total}:color={CARD_COLOR}:t=fill",
+            f"drawbox=x={x0}:y={top}:w={card_w}:h={total}:color=black:t={border}",
+        ]
+
     for index, line in enumerate(lines):
-        name = f"hook{index}.txt"
+        name = f"{prefix}{index}.txt"
         with open(os.path.join(work_dir, name), "w", encoding="utf-8") as file:
             file.write(line)
+        y = top + pad + index * line_step
+        if card:
+            style_options = (
+                ":fontcolor=black:borderw=2:bordercolor=white@0.85"
+            )
+        else:
+            style_options = (
+                f":fontcolor=white:box=1:boxcolor=black@0.62:boxborderw={pad}"
+            )
         filters.append(
-            "drawtext=fontfile=hookfont.ttf:textfile=" + name
-            + ":expansion=none"
-            + f":fontsize={size}:fontcolor=white"
-            + f":box=1:boxcolor=black@0.62:boxborderw={pad}"
-            + f":x=(w-text_w)/2:y={first_y + index * line_step}"
+            f"drawtext=fontfile={font_name}:textfile={name}:expansion=none"
+            f":fontsize={size}{style_options}:x=(w-text_w)/2:y={y}"
         )
     return "," + ",".join(filters)
+
+
+def _has_audio(path: str) -> bool:
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", path],
+            capture_output=True, text=True, check=True, timeout=60
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return bool(out.strip())
+
+
+def _wav_seconds(path: str) -> float:
+    import wave
+    with wave.open(path, "rb") as file:
+        return file.getnframes() / float(file.getframerate() or 1)
+
+
+INTRO_FPS = 30
+INTRO_TAIL = 0.5
+INTRO_MIN = 1.5
 
 
 def _render_vertical_single_pass(source_path: str, start: float, end: float,
                                  out_path: str, progress_callback=None,
                                  size: Optional[Tuple[int, int]] = None,
                                  frame: str = "wide", crop_x: float = 0.5,
-                                 hook_text: Optional[str] = None) -> str:
+                                 hook_text: Optional[str] = None,
+                                 hook_style: str = "box",
+                                 hook_position: str = "top",
+                                 intro_text: Optional[str] = None,
+                                 intro_audio: Optional[str] = None) -> str:
     """Potong dan ubah ke 9:16 dalam satu kali encode (tanpa OpenCV).
 
     Seluruh frame asli tetap terlihat di tengah; ruang kosong diisi
     salinan frame yang diblur. Blur selalu dikerjakan pada 180x320 lalu
     diperbesar ke ukuran kanvas: latar blur tidak punya detail, jadi
     tampilannya sama untuk semua ukuran dan bebannya tetap kecil.
+
+    Dengan `intro_text`, klip diawali pembuka: gambar pertama klip yang
+    dibekukan, kartu hook kuning di tengah, dan suara `intro_audio` (WAV)
+    bila ada. Semuanya tetap satu kali encode.
     """
+    import shutil
     import tempfile
 
     width, height = size or DEFAULT_RENDER_SIZE
@@ -459,38 +558,90 @@ def _render_vertical_single_pass(source_path: str, start: float, end: float,
     work_dir = tempfile.mkdtemp(prefix="zoi_hook_")
 
     try:
+        aspect = _probe_aspect(source_path)
         hook = ""
         if hook_text and clean_hook_text(hook_text):
             hook = _hook_filters(
-                hook_text, width, height, frame,
-                _probe_aspect(source_path), work_dir
+                hook_text, width, height, frame, aspect, work_dir,
+                style=hook_style, position=hook_position, prefix="hook"
             )
 
-        filter_complex = (
+        base = (
             f"[0:v]{_fps_limit_filter(source_path)}split=2[bg][fg];"
             "[bg]scale=180:320:force_original_aspect_ratio=increase,"
             f"crop=180:320,boxblur=6:3,scale={width}:{height}[bg];"
             + _foreground_filter(width, height, frame, crop_x)
-            + "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1" + hook + "[v]"
+            + "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+        )
+
+        intro = ""
+        if intro_text and clean_hook_text(intro_text):
+            intro = _hook_filters(
+                intro_text, width, height, frame, aspect, work_dir,
+                style="card", position="middle", prefix="intro"
+            )
+
+        if not intro:
+            _encode_vertical(
+                source_path, start, duration, base + hook + "[v]", out_path,
+                progress_callback, width, height, work_dir
+            )
+            return out_path
+
+        voice = 0.0
+        if intro_audio:
+            voice = _wav_seconds(intro_audio)
+            shutil.copyfile(intro_audio, os.path.join(work_dir, "intro.wav"))
+        intro_seconds = round(max(INTRO_MIN, voice + INTRO_TAIL), 2)
+        frames = max(1, int(round(intro_seconds * INTRO_FPS)))
+
+        audio_format = "aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo"
+        if intro_audio:
+            intro_sound = (
+                f"[1:a]{audio_format},apad,atrim=end={intro_seconds},"
+                "asetpts=N/SR/TB[ia];"
+            )
+        else:
+            intro_sound = (
+                f"anullsrc=r=44100:cl=stereo,atrim=end={intro_seconds},"
+                "asetpts=N/SR/TB[ia];"
+            )
+        if _has_audio(source_path):
+            main_sound = f"[0:a]{audio_format},asetpts=N/SR/TB[ma];"
+        else:
+            main_sound = (
+                f"anullsrc=r=44100:cl=stereo,atrim=end={duration:.3f},"
+                "asetpts=N/SR/TB[ma];"
+            )
+
+        graph = (
+            base + f",fps={INTRO_FPS},format=yuv420p,split=2[c][i];"
+            + "[c]null" + hook + "[main];"
+            + f"[i]trim=end_frame=1,loop=loop={frames - 1}:size=1:start=0,"
+            + f"setpts=N/{INTRO_FPS}/TB" + intro + "[introv];"
+            + intro_sound + main_sound
+            + "[introv][ia][main][ma]concat=n=2:v=1:a=1[v][a]"
         )
         _encode_vertical(
-            source_path, start, duration, filter_complex, out_path,
-            progress_callback, width, height, work_dir
+            source_path, start, duration, graph, out_path,
+            progress_callback, width, height, work_dir,
+            extra_inputs=["-i", "intro.wav"] if intro_audio else [],
+            audio_map="[a]", total=duration + intro_seconds
         )
     finally:
-        import shutil
         shutil.rmtree(work_dir, ignore_errors=True)
     return out_path
 
 
 def _encode_vertical(source_path, start, duration, filter_complex, out_path,
-                     progress_callback, width, height, work_dir):
+                     progress_callback, width, height, work_dir,
+                     extra_inputs=(), audio_map="0:a:0?", total=None):
     cmd = [
         "ffmpeg", "-y", "-loglevel", "error",
-        "-ss", f"{start:.3f}", "-i", source_path,
-        "-t", f"{duration:.3f}",
+        "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", source_path,
+        *extra_inputs,
         "-filter_complex", filter_complex,
-        "-map", "[v]", "-map", "0:a:0?",
+        "-map", "[v]", "-map", audio_map,
         "-c:v", "libx264", "-preset", RENDER_PRESET, "-crf", RENDER_CRF,
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "128k",
@@ -498,10 +649,20 @@ def _encode_vertical(source_path, start, duration, filter_complex, out_path,
         out_path,
     ]
     _run_ffmpeg_progress(
-        cmd, duration, progress_callback,
+        cmd, total or duration, progress_callback,
         5, 90, f"Memotong + reframing 9:16 ({width}x{height})",
         cwd=work_dir
     )
+
+
+def save_thumbnail(video_path: str, image_path: str, at: float = 0.3) -> str:
+    """Simpan satu gambar dari video sebagai thumbnail JPG."""
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{at:.2f}", "-i", video_path,
+         "-frames:v", "1", "-q:v", "2", image_path],
+        check=True, capture_output=True, timeout=120
+    )
+    return image_path
 
 
 def crop_clip_local(
@@ -515,6 +676,10 @@ def crop_clip_local(
     frame: str = "wide",
     crop_x: float = 0.5,
     hook_text: Optional[str] = None,
+    hook_style: str = "box",
+    hook_position: str = "top",
+    intro_text: Optional[str] = None,
+    intro_audio: Optional[str] = None,
 ) -> str:
     """Cut + reframe one highlight and report rendering progress.
 
@@ -538,13 +703,15 @@ def crop_clip_local(
         if frame not in RENDER_FRAMES:
             raise ValueError(f"Bingkai tidak dikenal: {frame}")
 
-        if size or frame != "wide" or hook_text or (
+        if size or frame != "wide" or hook_text or intro_text or (
             _ratio(aspect_ratio) == 9.0 / 16.0 and not _has_opencv()
         ):
             _render_vertical_single_pass(
                 source_path, start_time, end_time, work_path,
                 progress_callback=progress_callback, size=size, frame=frame,
-                crop_x=crop_x, hook_text=hook_text
+                crop_x=crop_x, hook_text=hook_text, hook_style=hook_style,
+                hook_position=hook_position, intro_text=intro_text,
+                intro_audio=os.path.abspath(intro_audio) if intro_audio else None
             )
         else:
             _cut_subclip(
